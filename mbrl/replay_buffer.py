@@ -1,4 +1,4 @@
-from typing import Sized, Tuple
+from typing import List, Sized, Tuple, Union
 
 import numpy as np
 
@@ -42,7 +42,7 @@ class SimpleReplayBuffer:
         indices = np.random.choice(self.num_stored, size=batch_size)
         return self._batch_from_indices(indices)
 
-    def _batch_from_indices(self, indices: Sized) -> Sized:
+    def _batch_from_indices(self, indices: Sized) -> Tuple:
         obs = self.obs[indices]
         next_obs = self.next_obs[indices]
         action = self.action[indices]
@@ -53,6 +53,27 @@ class SimpleReplayBuffer:
 
     def __len__(self):
         return self.num_stored
+
+    def save(self, path: str):
+        np.savez(
+            path,
+            obs=self.obs[: self.num_stored],
+            next_obs=self.next_obs[: self.num_stored],
+            action=self.action[: self.num_stored],
+            reward=self.reward[: self.num_stored],
+            done=self.done[: self.num_stored],
+        )
+
+    def load(self, path: str):
+        data = np.load(path)
+        num_stored = len(data["obs"])
+        self.obs[:num_stored] = data["obs"]
+        self.next_obs[:num_stored] = data["next_obs"]
+        self.action[:num_stored] = data["action"]
+        self.reward[:num_stored] = data["reward"]
+        self.done[:num_stored] = data["done"]
+        self.num_stored = num_stored
+        self.cur_idx = self.num_stored % self.capacity
 
 
 class IterableReplayBuffer(SimpleReplayBuffer):
@@ -94,6 +115,10 @@ class IterableReplayBuffer(SimpleReplayBuffer):
     def __len__(self):
         return (self.num_stored - 1) // self.batch_size + 1
 
+    def load(self, path: str):
+        super().load(path)
+        self._current_batch = 0
+
 
 # TODO Add a transition type to encapsulate this batch data
 class BootstrapReplayBuffer(IterableReplayBuffer):
@@ -115,7 +140,7 @@ class BootstrapReplayBuffer(IterableReplayBuffer):
             obs_type=obs_type,
             action_type=action_type,
         )
-        self.member_indices = [None for _ in range(num_members)]
+        self.member_indices: List[List[int]] = [None for _ in range(num_members)]
 
     def add(
         self,
@@ -143,7 +168,7 @@ class BootstrapReplayBuffer(IterableReplayBuffer):
             batches.append(self._batch_from_indices(content_indices))
         return batches
 
-    def sample(self, batch_size: int, ensemble=True) -> Sized:
+    def sample(self, batch_size: int, ensemble=True) -> Union[List[Tuple], Tuple]:
         if ensemble:
             batches = []
             for member_idx in self.member_indices:
