@@ -1,8 +1,6 @@
 import abc
-import dataclasses
 import itertools
 import pathlib
-import pickle
 from typing import Dict, List, Optional, Sequence, Tuple, Union
 
 import gym
@@ -15,92 +13,18 @@ from torch import nn as nn
 from torch import optim as optim
 from torch.nn import functional as F
 
+import mbrl.math
 import mbrl.types
 
 from . import replay_buffer
 
 
-# ------------------------------------------------------------------------ #
-# Common model utilities
-# ------------------------------------------------------------------------ #
-def gaussian_nll(
-    pred_mean: torch.Tensor, pred_logvar: torch.Tensor, target: torch.Tensor
-) -> torch.Tensor:
-    l2 = F.mse_loss(pred_mean, target, reduction="none")
-    inv_var = (-pred_logvar).exp()
-    losses = l2 * inv_var + pred_logvar
-    return losses.sum(dim=1).mean()
-
-
-@dataclasses.dataclass
-class Stats:
-    mean: Union[float, torch.Tensor]
-    m2: Union[float, torch.Tensor]
-    count: int
-
-
-class Normalizer:
-    _STATS_FNAME = "env_stats.pickle"
-
-    def __init__(self, in_size: int, device: torch.device):
-        self.stats = Stats(
-            torch.zeros((1, in_size), device=device),
-            torch.ones((1, in_size), device=device),
-            0,
-        )
-        self.device = device
-
-    def update_stats(self, val: Union[float, mbrl.types.TensorType]):
-        if isinstance(val, np.ndarray):
-            val = torch.from_numpy(val).to(self.device)
-        mean, m2, count = dataclasses.astuple(self.stats)
-        count = count + 1
-        delta = val - mean
-        mean += delta / count
-        delta2 = val - mean
-        m2 += delta * delta2
-        self.stats.mean = mean
-        self.stats.m2 = m2
-        self.stats.count = count
-
-    def normalize(
-        self, val: Union[float, mbrl.types.TensorType]
-    ) -> Union[float, mbrl.types.TensorType]:
-        if isinstance(val, np.ndarray):
-            val = torch.from_numpy(val).to(self.device)
-        mean, m2, count = dataclasses.astuple(self.stats)
-        if count > 1:
-            std = torch.sqrt(m2 / (count - 1))
-            return (val - mean) / std
-        return val
-
-    def denormalize(
-        self, val: Union[float, mbrl.types.TensorType]
-    ) -> Union[float, mbrl.types.TensorType]:
-        if isinstance(val, np.ndarray):
-            val = torch.from_numpy(val).to(self.device)
-        mean, m2, count = dataclasses.astuple(self.stats)
-        if count > 1:
-            std = torch.sqrt(m2 / (count - 1))
-            return std * val + mean
-        return val
-
-    def load(self, results_dir: Union[str, pathlib.Path]):
-        with open(pathlib.Path(results_dir) / self._STATS_FNAME, "rb") as f:
-            stats = pickle.load(f)
-            self.stats = Stats(
-                torch.from_numpy(stats["mean"]).to(self.device),
-                torch.from_numpy(stats["m2"]).to(self.device),
-                stats["count"],
-            )
-
-    def save(self, save_dir: Union[str, pathlib.Path]):
-        mean, m2, count = dataclasses.astuple(self.stats)
-        save_dir = pathlib.Path(save_dir)
-        with open(save_dir / self._STATS_FNAME, "wb") as f:
-            pickle.dump(
-                {"mean": mean.cpu().numpy(), "m2": m2.cpu().numpy(), "count": count}, f
-            )
+def truncated_normal_init(m: nn.Module):
+    if isinstance(m, nn.Linear):
+        input_dim = m.weight.data.shape[0]
+        stddev = 1 / (2 * np.sqrt(input_dim))
+        mbrl.math.truncated_normal_(m.weight.data, std=stddev)
+        m.bias.data.fill_(0.0)
 
 
 # ------------------------------------------------------------------------ #
@@ -163,7 +87,11 @@ class GaussianMLP(Model):
         self.min_logvar = nn.Parameter(
             -10 * torch.ones(1, out_size, requires_grad=True)
         )
-        self.max_logvar = nn.Parameter(10 * torch.ones(1, out_size, requires_grad=True))
+        self.max_logvar = nn.Parameter(
+            0.5 * torch.ones(1, out_size, requires_grad=True)
+        )
+
+        self.apply(truncated_normal_init)
 
     def forward(self, x: torch.Tensor, **_kwargs) -> Tuple[torch.Tensor, torch.Tensor]:
         x = self.hidden_layers(x)
@@ -175,7 +103,8 @@ class GaussianMLP(Model):
 
     def loss(self, model_in: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         pred_mean, pred_logvar = self.forward(model_in)
-        return gaussian_nll(pred_mean, pred_logvar, target)
+        nll = mbrl.math.gaussian_nll(pred_mean, pred_logvar, target)
+        return nll + 0.01 * self.max_logvar.sum() - 0.01 * self.min_logvar.sum()
 
     def eval_score(self, model_in: torch.Tensor, target: torch.Tensor) -> float:
         with torch.no_grad():
@@ -331,15 +260,21 @@ class DynamicsModelWrapper:
         model: Ensemble,
         target_is_delta: bool = True,
         normalize: bool = False,
+        learned_rewards: bool = True,
         obs_process_fn: Optional[mbrl.types.ObsProcessFnType] = None,
+        no_delta_list: Optional[List[int]] = None,
     ):
         assert hasattr(model, "members")
         self.model = model
-        self.normalizer: Optional[Normalizer] = None
+        self.normalizer: Optional[mbrl.math.Normalizer] = None
         if normalize:
-            self.normalizer = Normalizer(self.model.in_size, self.model.device)
+            self.normalizer = mbrl.math.Normalizer(
+                self.model.in_size, self.model.device
+            )
         self.device = self.model.device
+        self.learned_rewards = learned_rewards
         self.target_is_delta = target_is_delta
+        self.no_delta_list = no_delta_list if no_delta_list else []
         self.obs_process_fn = obs_process_fn
 
     def update_normalizer(self, batch: Tuple):
@@ -376,12 +311,20 @@ class DynamicsModelWrapper:
         self, batch: Tuple
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         obs, action, next_obs, reward, _ = batch
-        target_obs = next_obs - obs if self.target_is_delta else next_obs
+        if self.target_is_delta:
+            target_obs = next_obs - obs
+            for dim in self.no_delta_list:
+                target_obs[:, dim] = next_obs[:, dim]
+        else:
+            target_obs = next_obs
 
         model_in = self._get_model_input_from_np(obs, action, self.device)
-        target = torch.from_numpy(
-            np.concatenate([target_obs, np.expand_dims(reward, axis=1)], axis=1)
-        ).to(self.device)
+        if self.learned_rewards:
+            target = torch.from_numpy(
+                np.concatenate([target_obs, np.expand_dims(reward, axis=1)], axis=1)
+            ).to(self.device)
+        else:
+            target = torch.from_numpy(target_obs).to(self.device)
         return model_in, target
 
     def loss_from_bootstrap_batch(self, bootstrap_batch: Tuple):
@@ -402,6 +345,15 @@ class DynamicsModelWrapper:
         model_ins = [model_in for _ in range(len(self.model))]
         targets = [target for _ in range(len(self.model))]
         return self.model.eval_score(model_ins, targets)
+
+    def get_output_and_targets_from_simple_batch(
+        self, batch: Tuple
+    ) -> Tuple[List[torch.Tensor], torch.Tensor]:
+        assert isinstance(self.model, Ensemble)
+        with torch.no_grad():
+            model_in, target = self._get_model_input_and_target_from_batch(batch)
+            outputs = [member(model_in) for member in self.model.members]
+        return outputs, target
 
     def predict(
         self,
@@ -426,10 +378,13 @@ class DynamicsModelWrapper:
         else:
             predictions = means
 
-        next_observs = predictions[:, :-1]
+        next_observs = predictions[:, :-1] if self.learned_rewards else predictions
         if self.target_is_delta:
-            next_observs += obs
-        rewards = predictions[:, -1:]
+            tmp_ = next_observs + obs
+            for dim in self.no_delta_list:
+                tmp_[:, dim] = next_observs[:, dim]
+            next_observs = tmp_
+        rewards = predictions[:, -1:] if self.learned_rewards else None
         return next_observs, rewards
 
     def save(self, save_dir: Union[str, pathlib.Path]):
@@ -558,7 +513,7 @@ class ModelEnv:
         self._current_obs: torch.Tensor = None
         self._propagation_method: Optional[str] = None
         self._model_indices = None
-        self._rng = torch.Generator()
+        self._rng = torch.Generator(device=self.device)
         if seed is not None:
             self._rng.manual_seed(seed)
         self._return_as_np = True
