@@ -51,6 +51,21 @@ def make_env(
     return env, term_fn, reward_fn
 
 
+def make_env_from_str(env_name: str) -> gym.Env:
+    if "dmcontrol___" in env_name:
+        domain, task = env_name.split("___")[1].split("--")
+        env = dmc2gym.make(domain_name=domain, task_name=task)
+    elif "gym___" in env_name:
+        env = gym.make(env_name.split("___")[1])
+    elif env_name == "cartpole_continuous":
+        env = mbrl.env.cartpole_continuous.CartPoleEnv()
+    elif env_name == "pets_halfcheetah":
+        env = mbrl.env.pets_halfcheetah.HalfCheetahEnv()
+    else:
+        raise ValueError("Invalid environment string.")
+    return env
+
+
 def create_dynamics_model(
     cfg: omegaconf.DictConfig,
     obs_shape: Tuple[int],
@@ -131,6 +146,16 @@ def create_ensemble_buffers(
     return train_buffer, val_buffer
 
 
+def save_buffers(
+    env_dataset_train: mbrl.replay_buffer.SimpleReplayBuffer,
+    env_dataset_val: mbrl.replay_buffer.SimpleReplayBuffer,
+    work_dir: Union[str, pathlib.Path],
+):
+    work_path = pathlib.Path(work_dir)
+    env_dataset_train.save(str(work_path / "replay_buffer_train"))
+    env_dataset_val.save(str(work_path / "replay_buffer_val"))
+
+
 # ------------------------------------------------------------------------ #
 # Utilities to roll out environments
 # ------------------------------------------------------------------------ #
@@ -179,6 +204,36 @@ class freeze_mujoco_env:
         return self._exit_method()
 
 
+def get_current_state(env: gym.wrappers.TimeLimit) -> Tuple:
+    if isinstance(env.env, gym.envs.mujoco.MujocoEnv):
+        state = (
+            env.env.data.qpos.ravel().copy(),
+            env.env.data.qvel.ravel().copy(),
+        )
+        elapsed_steps = env._elapsed_steps
+        return state, elapsed_steps
+    elif isinstance(env.env, dmc2gym.wrappers.DMCWrapper):
+        state = env.env._env.physics.get_state().copy()
+        elapsed_steps = env._elapsed_steps
+        step_count = env.env._env._step_count
+        return state, elapsed_steps, step_count
+    else:
+        raise ValueError(
+            "Only gym mujoco and dmcontrol environments supported by get_current_state"
+        )
+
+
+def set_env_state(state: Tuple, env: gym.wrappers.TimeLimit):
+    if isinstance(env.env, gym.envs.mujoco.MujocoEnv):
+        env.set_state(*state[0])
+        env._elapsed_steps = state[1]
+    elif isinstance(env.env, dmc2gym.wrappers.DMCWrapper):
+        with env.env._env.physics.reset_context():
+            env.env._env.physics.set_state(state[0])
+            env._elapsed_steps = state[1]
+            env.env._env._step_count = state[2]
+
+
 # If plan is given, then ignores agent and runs the actions in the plan
 def rollout_env(
     env: gym.wrappers.TimeLimit,
@@ -197,6 +252,8 @@ def rollout_env(
             lookahead = len(plan)
         for i in range(lookahead):
             a = plan[i] if plan is not None else agent.act(current_obs)
+            if isinstance(a, torch.Tensor):
+                a = a.numpy()
             next_obs, reward, done, _ = env.step(a)
             actions.append(a)
             real_obses.append(next_obs)
