@@ -173,7 +173,19 @@ class freeze_mujoco_env:
             self._enter_method = self._enter_dmcontrol
             self._exit_method = self._exit_dmcontrol
         else:
-            raise RuntimeError("Tried to freeze an unsupported environment.")
+            self._enter_method = self._enter_vanilla
+            self._exit_method = self._exit_vanilla
+
+        # else:
+        #     raise RuntimeError("Tried to freeze an unsupported environment.")
+
+    def _enter_vanilla(self):
+        self._init_state = self._env.state
+        self._elapsed_steps = self._env._elapsed_steps
+
+    def _exit_vanilla(self):
+        self._env.set_state(self._init_state)
+        self._env._elapsed_steps = self._elapsed_steps
 
     def _enter_mujoco_gym(self):
         self._init_state = (
@@ -253,7 +265,7 @@ def rollout_env(
         for i in range(lookahead):
             a = plan[i] if plan is not None else agent.act(current_obs)
             if isinstance(a, torch.Tensor):
-                a = a.numpy()
+                a = a.cpu().numpy()
             next_obs, reward, done, _ = env.step(a)
             actions.append(a)
             real_obses.append(next_obs)
