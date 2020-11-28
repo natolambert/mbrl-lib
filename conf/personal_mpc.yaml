@@ -1,6 +1,16 @@
 model_path: /home/hiro/mbrl/exp/pets/debug/cartpole_continuous/2020.11.16/1312/
-  #/checkpoint/nol/mbrl/exp/pets/debug/cartpole_continuous/2020.11.15/0951/
-mpc_true_model: False
+#/checkpoint/nol/mbrl/exp/pets/debug/cartpole_continuous/2020.11.15/0951/
+actions_path: /checkpoint/nol/mbrl/exp/pets/debug_mpc/cartpole_continuous/2020.11.20/1048/
+
+load_actions: false
+mpc_true_model: false
+mpc_repeat: 100
+debug_mode: true
+
+obs_gen: idx
+obs_idx: 25
+obs_set: [ -2, -0.05, -0.05, 0 ]
+
 
 model:
   _target_: mbrl.models.Ensemble
@@ -63,4 +73,7 @@ experiment: debug_mpc
 
 hydra:
   run:
-    dir:  /checkpoint/nol/mbrl/exp/pets/${experiment}/${env}/${now:%Y.%m.%d}/${now:%H%M}
+    dir: /checkpoint/nol/mbrl/exp/pets/${experiment}/${env}/${now:%Y.%m.%d}/${now:%H%M}
+  sweep:
+    dir: /checkpoint/nol/mbrl/exp/pets/${experiment}/${env}/${now:%Y.%m.%d}/${now:%H%M}
+    subdir: ${hydra.job.override_dirname}/${hydra.job.num}
