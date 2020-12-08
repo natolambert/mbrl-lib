@@ -17,34 +17,40 @@ import mbrl.planning
 import mbrl.replay_buffer
 import mbrl.types
 
-
 # ------------------------------------------------------------------------ #
 # Generic utilities
 # ------------------------------------------------------------------------ #
+
+
 def make_env(
     cfg: omegaconf.DictConfig,
 ) -> Tuple[gym.Env, Callable, Callable]:
-    if "dmcontrol___" in cfg.env:
-        domain, task = cfg.env.split("___")[1].split("--")
+    if "dmcontrol___" in cfg.overrides.env:
+        domain, task = cfg.overrides.env.split("___")[1].split("--")
         term_fn = getattr(mbrl.env.termination_fns, domain)
-        reward_fn = getattr(mbrl.env.reward_fns, cfg.term_fn, None)
+        reward_fn = getattr(mbrl.env.reward_fns, cfg.overrides.term_fn, None)
         env = dmc2gym.make(domain_name=domain, task_name=task)
-    elif "gym___" in cfg.env:
-        env = gym.make(cfg.env.split("___")[1])
-        term_fn = getattr(mbrl.env.termination_fns, cfg.term_fn)
-        reward_fn = getattr(mbrl.env.reward_fns, cfg.term_fn, None)
-    elif cfg.env == "cartpole_continuous":
+    elif "gym___" in cfg.overrides.env:
+        env = gym.make(cfg.overrides.env.split("___")[1])
+        term_fn = getattr(mbrl.env.termination_fns, cfg.overrides.term_fn)
+        reward_fn = getattr(mbrl.env.reward_fns, cfg.overrides.term_fn, None)
+    elif cfg.overrides.env == "cartpole_continuous":
         env = mbrl.env.cartpole_continuous.CartPoleEnv()
-        term_fn = getattr(mbrl.env.termination_fns, cfg.term_fn)
-        reward_fn = getattr(mbrl.env.reward_fns, cfg.term_fn, None)
-    elif cfg.env == "pets_halfcheetah":
+        term_fn = getattr(mbrl.env.termination_fns, cfg.overrides.term_fn)
+        reward_fn = getattr(mbrl.env.reward_fns, cfg.overrides.term_fn, None)
+    elif cfg.overrides.env == "pets_halfcheetah":
         env = mbrl.env.pets_halfcheetah.HalfCheetahEnv()
         term_fn = mbrl.env.termination_fns.no_termination
         reward_fn = getattr(mbrl.env.reward_fns, "halfcheetah", None)
+    elif cfg.overrides.env == "ant_truncated_obs":
+        env = mbrl.env.ant_truncated_obs.AntTruncatedObsEnv()
+        env = gym.wrappers.TimeLimit(env, max_episode_steps=1000)
+        term_fn = mbrl.env.termination_fns.ant
+        reward_fn = None
     else:
         raise ValueError("Invalid environment string.")
 
-    learned_rewards = cfg.get("learned_rewards", True)
+    learned_rewards = cfg.overrides.get("learned_rewards", True)
     if learned_rewards:
         reward_fn = None
 
@@ -61,6 +67,8 @@ def make_env_from_str(env_name: str) -> gym.Env:
         env = mbrl.env.cartpole_continuous.CartPoleEnv()
     elif env_name == "pets_halfcheetah":
         env = mbrl.env.pets_halfcheetah.HalfCheetahEnv()
+    elif env_name == "ant_truncated_obs":
+        env = mbrl.env.ant_truncated_obs.AntTruncatedObsEnv()
     else:
         raise ValueError("Invalid environment string.")
     return env
@@ -72,23 +80,26 @@ def create_dynamics_model(
     act_shape: Tuple[int],
     model_dir: Optional[Union[str, pathlib.Path]] = None,
 ):
-    # Fix this for learned_rewards
-    cfg.model.in_size = obs_shape[0] + (act_shape[0] if act_shape else 1)
-    cfg.model.out_size = obs_shape[0]
-    if cfg.learned_rewards:
-        cfg.model.out_size += 1
-    ensemble = hydra.utils.instantiate(cfg.model)
+    if cfg.dynamics_model.model.get("in_size", None) is None:
+        cfg.dynamics_model.model.in_size = obs_shape[0] + (
+            act_shape[0] if act_shape else 1
+        )
+    if cfg.dynamics_model.model.get("out_size", None) is None:
+        cfg.dynamics_model.model.out_size = obs_shape[0]
+    if cfg.algorithm.learned_rewards:
+        cfg.dynamics_model.model.out_size += 1
+    ensemble = hydra.utils.instantiate(cfg.dynamics_model.model)
 
-    name_obs_process_fn = cfg.get("obs_process_fn", None)
+    name_obs_process_fn = cfg.overrides.get("obs_process_fn", None)
     if name_obs_process_fn:
-        obs_process_fn = hydra.utils.get_method(cfg.obs_process_fn)
+        obs_process_fn = hydra.utils.get_method(cfg.overrides.obs_process_fn)
     else:
         obs_process_fn = None
     dynamics_model = mbrl.models.DynamicsModelWrapper(
         ensemble,
-        target_is_delta=cfg.target_is_delta,
-        normalize=cfg.normalize,
-        learned_rewards=cfg.learned_rewards,
+        target_is_delta=cfg.algorithm.target_is_delta,
+        normalize=cfg.algorithm.normalize,
+        learned_rewards=cfg.algorithm.learned_rewards,
         obs_process_fn=obs_process_fn,
         no_delta_list=cfg.get("no_delta_list", None),
     )
@@ -98,42 +109,46 @@ def create_dynamics_model(
     return dynamics_model
 
 
-def get_hydra_cfg(results_dir: Union[str, pathlib.Path]):
+def load_hydra_cfg(results_dir: Union[str, pathlib.Path]):
     results_dir = pathlib.Path(results_dir)
     cfg_file = results_dir / ".hydra" / "config.yaml"
     return omegaconf.OmegaConf.load(cfg_file)
 
 
-def create_ensemble_buffers(
+def create_replay_buffers(
     cfg: omegaconf.DictConfig,
     obs_shape: Tuple[int],
     act_shape: Tuple[int],
     load_dir: Optional[Union[str, pathlib.Path]] = None,
-    train_no_bootstrap: bool = False,
+    train_is_bootstrap: bool = True,
 ) -> Tuple[
     mbrl.replay_buffer.IterableReplayBuffer, mbrl.replay_buffer.IterableReplayBuffer
 ]:
-    if train_no_bootstrap:
-        train_buffer = mbrl.replay_buffer.IterableReplayBuffer(
-            cfg.env_dataset_size,
-            cfg.dynamics_model_batch_size,
+    dataset_size = cfg.algorithm.get("dataset_size", None)
+    if not dataset_size:
+        dataset_size = cfg.overrides.trial_length * cfg.overrides.num_trials
+    train_buffer: mbrl.replay_buffer.IterableReplayBuffer
+    if train_is_bootstrap:
+        train_buffer = mbrl.replay_buffer.BootstrapReplayBuffer(
+            dataset_size,
+            cfg.overrides.model_batch_size,
+            cfg.dynamics_model.model.ensemble_size,
             obs_shape,
             act_shape,
             shuffle_each_epoch=True,
         )
     else:
-        train_buffer = mbrl.replay_buffer.BootstrapReplayBuffer(
-            cfg.env_dataset_size,
-            cfg.dynamics_model_batch_size,
-            cfg.model.ensemble_size,
+        train_buffer = mbrl.replay_buffer.IterableReplayBuffer(
+            dataset_size,
+            cfg.overrides.model_batch_size,
             obs_shape,
             act_shape,
             shuffle_each_epoch=True,
         )
-    val_buffer_capacity = int(cfg.env_dataset_size * cfg.validation_ratio)
+    val_buffer_capacity = int(dataset_size * cfg.overrides.validation_ratio)
     val_buffer = mbrl.replay_buffer.IterableReplayBuffer(
         val_buffer_capacity,
-        cfg.dynamics_model_batch_size,
+        cfg.overrides.model_batch_size,
         obs_shape,
         act_shape,
     )
@@ -154,6 +169,27 @@ def save_buffers(
     work_path = pathlib.Path(work_dir)
     env_dataset_train.save(str(work_path / "replay_buffer_train"))
     env_dataset_val.save(str(work_path / "replay_buffer_val"))
+
+
+def train_model_and_save_model_and_data(
+    dynamics_model: mbrl.models.DynamicsModelWrapper,
+    model_trainer: mbrl.models.DynamicsModelTrainer,
+    cfg: omegaconf.DictConfig,
+    dataset_train: mbrl.replay_buffer.SimpleReplayBuffer,
+    dataset_val: mbrl.replay_buffer.SimpleReplayBuffer,
+    work_dir: Union[str, pathlib.Path],
+    env_steps: int,
+    logger: pytorch_sac.Logger,
+):
+    logger.log("train/train_dataset_size", dataset_train.num_stored, env_steps)
+    logger.log("train/val_dataset_size", dataset_val.num_stored, env_steps)
+    model_trainer.train(
+        num_epochs=cfg.overrides.get("num_epochs_train_model", None),
+        patience=cfg.overrides.patience,
+    )
+    dynamics_model.save(work_dir)
+    mbrl.util.save_buffers(dataset_train, dataset_val, work_dir)
+    logger.dump(env_steps, save=True)
 
 
 # ------------------------------------------------------------------------ #
@@ -280,27 +316,13 @@ def rollout_model_env(
     model_env: mbrl.models.ModelEnv,
     initial_obs: np.ndarray,
     plan: Optional[np.ndarray] = None,
-    planner: Optional[mbrl.planning.CEMPlanner] = None,
-    cfg: Optional[omegaconf.DictConfig] = None,
+    agent: Optional[mbrl.planning.Agent] = None,
     num_samples: int = 1,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     obs_history = []
     reward_history = []
-    if planner:
-
-        def trajectory_eval_fn(action_sequence: torch.Tensor) -> torch.Tensor:
-            return model_env.evaluate_action_sequences(
-                action_sequence,
-                initial_state=initial_obs[None, :],
-                num_particles=cfg.num_particles,
-                propagation_method=cfg.propagation_method,
-            )
-
-        plan, _ = planner.plan(
-            model_env.action_space.shape,
-            cfg.planning_horizon,
-            trajectory_eval_fn,
-        )
+    if agent:
+        plan = agent.plan(initial_obs[None, :])
     obs0 = model_env.reset(
         np.tile(initial_obs, (num_samples, 1)),
         propagation_method="random_model",
@@ -316,6 +338,36 @@ def rollout_model_env(
     return np.stack(obs_history), np.stack(reward_history), plan
 
 
+def select_dataset_to_update(
+    train_dataset: mbrl.replay_buffer.SimpleReplayBuffer,
+    val_dataset: mbrl.replay_buffer.SimpleReplayBuffer,
+    increase_val_set: bool,
+    validation_ratio: float,
+    rng: np.random.Generator,
+) -> mbrl.replay_buffer.SimpleReplayBuffer:
+    if increase_val_set and rng.random() < validation_ratio:
+        return val_dataset
+    else:
+        return train_dataset
+
+
+def step_env_and_populate_dataset(
+    env: gym.Env,
+    obs: np.ndarray,
+    agent: mbrl.planning.Agent,
+    agent_kwargs: Dict,
+    dataset: mbrl.replay_buffer.SimpleReplayBuffer,
+    normalizer_callback: Optional[Callable] = None,
+) -> Tuple[np.ndarray, float, bool, Dict]:
+    action = agent.act(obs, **agent_kwargs)
+    next_obs, reward, done, info = env.step(action)
+    dataset.add(obs, action, next_obs, reward, done)
+    if normalizer_callback:
+        normalizer_callback((obs, action, next_obs, reward, done))
+
+    return next_obs, reward, done, info
+
+
 def populate_buffers_with_agent_trajectories(
     env: gym.Env,
     env_dataset_train: mbrl.replay_buffer.SimpleReplayBuffer,
@@ -325,6 +377,8 @@ def populate_buffers_with_agent_trajectories(
     agent: mbrl.planning.Agent,
     agent_kwargs: Dict,
     rng: np.random.Generator,
+    trial_length: Optional[int] = None,
+    normalizer_callback: Optional[Callable] = None,
 ):
     indices = rng.permutation(steps_to_collect)
     n_train = int(steps_to_collect * (1 - val_ratio))
@@ -335,50 +389,20 @@ def populate_buffers_with_agent_trajectories(
         obs = env.reset()
         done = False
         while not done:
-            action = agent.act(obs, **agent_kwargs)
-            next_obs, reward, done, info = env.step(action)
-            if step in indices_train:
-                env_dataset_train.add(obs, action, next_obs, reward, done)
-            else:
-                env_dataset_test.add(obs, action, next_obs, reward, done)
+            which_dataset = (
+                env_dataset_train if step in indices_train else env_dataset_test
+            )
+            next_obs, *_, = step_env_and_populate_dataset(
+                env,
+                obs,
+                agent,
+                agent_kwargs,
+                which_dataset,
+                normalizer_callback=normalizer_callback,
+            )
             obs = next_obs
             step += 1
             if step == steps_to_collect:
                 return
-
-
-# ------------------------------------------------------------------------ #
-# Utilities for agents
-# ------------------------------------------------------------------------ #
-# TODO unify this with planner configuration (probably have cem planner under a common base
-#   config, both using action_lb, action_ub. Refactor SAC agent accordingly)
-def complete_sac_cfg(env: gym.Env, cfg: omegaconf.DictConfig) -> omegaconf.DictConfig:
-    obs_shape = env.observation_space.shape
-    act_shape = env.action_space.shape
-
-    cfg.agent.obs_dim = obs_shape[0]
-    cfg.agent.action_dim = act_shape[0]
-    cfg.agent.action_range = [
-        float(env.action_space.low.min()),
-        float(env.action_space.high.max()),
-    ]
-
-    return cfg
-
-
-def load_agent(
-    agent_path: Union[str, pathlib.Path], env: gym.Env, agent_type: str
-) -> mbrl.planning.Agent:
-    agent_path = pathlib.Path(agent_path)
-    if agent_type == "pytorch_sac":
-        cfg = omegaconf.OmegaConf.load(agent_path / ".hydra" / "config.yaml")
-        cfg.agent._target_ = "pytorch_sac.agent.sac.SACAgent"
-        cfg = complete_sac_cfg(env, cfg)
-        agent: pytorch_sac.SACAgent = hydra.utils.instantiate(cfg.agent)
-        agent.critic.load_state_dict(torch.load(agent_path / "critic.pth"))
-        agent.actor.load_state_dict(torch.load(agent_path / "actor.pth"))
-        return mbrl.planning.SACAgent(agent)
-    else:
-        raise ValueError(
-            f"Invalid agent type {agent_type}. Supported options are: 'pytorch_sac'."
-        )
+            if trial_length and step % trial_length == 0:
+                break
