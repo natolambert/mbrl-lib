@@ -1,16 +1,23 @@
-model_path: /home/hiro/mbrl/exp/pets/debug/cartpole_continuous/2020.11.16/1312/
+model_path: /home/hiro/mbrl/exp/pets/pets/cartpole_continuous/2020.11.30/1050/
+model_path_hc: /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/162704/ #/home/hiro/mbrl/exp/ref/halfcheetah/ #/home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/162704/ # /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/161225/ #
+  # HC normalized /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/162704/
+  # HC unnorm /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/161225/
+  # HC from Luis /home/hiro/mbrl/exp/ref/
+# discrete rew /home/hiro/mbrl/exp/pets/debug/cartpole_continuous/2020.11.30/0759/
+#/home/hiro/mbrl/exp/pets/debug/cartpole_continuous/2020.11.16/1312/
 #/checkpoint/nol/mbrl/exp/pets/debug/cartpole_continuous/2020.11.15/0951/
-actions_path: /checkpoint/nol/mbrl/exp/pets/debug_mpc/cartpole_continuous/2020.11.20/1048/
+actions_path: #/checkpoint/nol/mbrl/exp/pets/debug_mpc/cartpole_continuous/2020.11.20/1048/
 
 load_actions: false
 mpc_true_model: false
-mpc_repeat: 100
+mpc_repeat: 200
 debug_mode: true
 
 obs_gen: idx
 obs_idx: 25
 obs_set: [ -2, -0.05, -0.05, 0 ]
 
+obs_process_fn: mbrl.env.pets_halfcheetah.HalfCheetahEnv.preprocess_fn
 
 model:
   _target_: mbrl.models.Ensemble
@@ -41,24 +48,33 @@ planner:
   action_ub: ???
   device: ${model.device}
 
-env: cartpole_continuous
-term_fn: "cartpole"
+
+env: "pets_halfcheetah" #cartpole_continuous #
+term_fn: "no_termination"
 normalize: true
 target_is_delta: true
 learned_rewards: false
+#
+#env: cartpole_continuous
+#term_fn: "cartpole"
+#normalize: true
+#target_is_delta: true
+#learned_rewards: false
 
-env_dataset_size: 20000
+env_dataset_size: 2000000
+#env_dataset_size: 20000
 validation_ratio: 0.1
 dynamics_model_batch_size: 256
 initial_exploration_steps: 200
 num_trials: 15
-trial_length: 200
+trial_length: 1000
 num_epochs_train_dyn_model: 50
 patience: 50
 freq_train_dyn_model: ${trial_length}
 increase_val_set: true
 
-planning_horizon: 15
+#planning_horizon: 15
+planning_horizon: 25
 num_particles: 20
 propagation_method: "random_model"
 replan_freq: 1
@@ -69,11 +85,11 @@ device: "cuda:0"
 
 log_frequency_model: 1
 
-experiment: debug_mpc
+experiment: mpc
 
 hydra:
   run:
-    dir: /checkpoint/nol/mbrl/exp/pets/${experiment}/${env}/${now:%Y.%m.%d}/${now:%H%M}
+    dir: ./exp/mpc/${experiment}/${env}/${now:%Y.%m.%d}/${now:%H%M%S} #/checkpoint/nol/mbrl/exp/pets/${experiment}/${env}/${now:%Y.%m.%d}/${now:%H%M}
   sweep:
-    dir: /checkpoint/nol/mbrl/exp/pets/${experiment}/${env}/${now:%Y.%m.%d}/${now:%H%M}
+    dir: ./exp/mpc/${experiment}/${env}/${now:%Y.%m.%d}/${now:%H%M%S} #/checkpoint/nol/mbrl/exp/pets/${experiment}/${env}/${now:%Y.%m.%d}/${now:%H%M}
     subdir: ${hydra.job.override_dirname}/${hydra.job.num}

@@ -5,13 +5,12 @@ from . import termination_fns
 
 def cartpole(act: torch.Tensor, next_obs: torch.Tensor) -> torch.Tensor:
     assert len(next_obs.shape) == len(act.shape) == 2
-
+    # return -(next_obs[:,0]**2 + next_obs[:,2]**2)
     return (~termination_fns.cartpole(act, next_obs)).float()
 
 
 def inverted_pendulum(act: torch.Tensor, next_obs: torch.Tensor) -> torch.Tensor:
     assert len(next_obs.shape) == len(act.shape) == 2
-
     return (~termination_fns.inverted_pendulum(act, next_obs)).float()
 
 

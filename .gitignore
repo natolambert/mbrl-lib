@@ -1,4 +1,6 @@
-*personal*
+*personal_pets*
 .idea
 .mypy_cache
+exp/
+exp_local/
 notebooks/.ipynb_checkpoints

@@ -4,16 +4,19 @@ import numpy as np
 # import matplotlib.mlab as mlab
 import matplotlib.pyplot as plt
 from matplotlib import RcParams
-
 import omegaconf
 import torch
 
+# import pytorch_sac
 import mbrl.util as util
 import gym
 import mbrl.models as models
 import time
 import functools
 import os
+import logging
+
+log = logging.getLogger(__name__)
 
 
 def evaluate_action_sequences_(
@@ -26,22 +29,98 @@ def evaluate_action_sequences_(
     return all_rewards
 
 
+PETS_LOG_FORMAT = [
+    ("episode", "E", "int"),
+    ("step", "S", "int"),
+    ("rollout_length", "RL", "int"),
+    ("train_dataset_size", "TD", "int"),
+    ("val_dataset_size", "VD", "int"),
+    ("model_loss", "MLOSS", "float"),
+    ("model_score", "MSCORE", "float"),
+    ("model_val_score", "MVSCORE", "float"),
+    ("model_best_val_score", "MBVSCORE", "float"),
+]
+
+EVAL_LOG_FORMAT = [
+    ("trial", "T", "int"),
+    ("episode_reward", "R", "float"),
+]
+
+
 @hydra.main(config_path="conf", config_name="personal_mpc")  # personal_
 def run(cfg: omegaconf.DictConfig):
-    print(omegaconf.OmegaConf.to_yaml(cfg))
+    log.info(omegaconf.OmegaConf.to_yaml(cfg))
     env, term_fn, reward_fn = util.make_env(cfg)
     env.seed(cfg.seed)
-    env = gym.wrappers.TimeLimit(env, max_episode_steps=200)
+    env = gym.wrappers.TimeLimit(env, max_episode_steps=cfg.trial_length)
     env._elapsed_steps = 0
+    env.reset()
 
-    model_cfg = util.get_hydra_cfg(cfg.model_path)
+    # # HC setup
+    # pets_logger = pytorch_sac.Logger(
+    #     os.getcwd(),
+    #     save_tb=False,
+    #     log_frequency=None,
+    #     agent="pets",
+    #     train_format=PETS_LOG_FORMAT,
+    #     eval_format=EVAL_LOG_FORMAT,
+    # )
+    # obs_shape = env.observation_space.shape
+    # act_shape = env.action_space.shape
+    # from typing import cast, List
+    # import mbrl.replay_buffer as replay_buffer
+    # import mbrl
+
+    # env_dataset_train, env_dataset_val = mbrl.util.create_ensemble_buffers(
+    #     cfg, obs_shape, act_shape
+    # )
+    # env_dataset_train = cast(replay_buffer.BootstrapReplayBuffer, env_dataset_train)
+    # env_dataset_train.load("/home/hiro/mbrl/exp/ref/halfcheetah/pets_replay_buffer_train.npz")
+    # env_dataset_val.load("/home/hiro/mbrl/exp/ref/halfcheetah/pets_replay_buffer_val.npz")
+    # dynamics_model = mbrl.util.create_dynamics_model(cfg, obs_shape, act_shape)
+    # # name_obs_process_fn = "mbrl.env.pets_halfcheetah.HalfCheetahEnv.preprocess_fn"
+    # #cfg.get("obs_process_fn", None)
+    # # name_obs_process_fn = cfg.get("obs_process_fn", None)
+    # # if name_obs_process_fn:
+    # #     obs_process_fn = hydra.utils.get_method(cfg.obs_process_fn)
+    # # else:
+    # #     obs_process_fn = None
+    # # dynamics_model = mbrl.models.DynamicsModelWrapper(
+    # #     dynamics_model.model,
+    # #     target_is_delta=cfg.target_is_delta,
+    # #     normalize=cfg.normalize,
+    # #     learned_rewards=cfg.learned_rewards,
+    # #     obs_process_fn=obs_process_fn,
+    # #     no_delta_list=cfg.get("no_delta_list", None),
+    # # )
+    # model_trainer = models.EnsembleTrainer(
+    #     dynamics_model,
+    #     env_dataset_train,
+    #     dataset_val=env_dataset_val,
+    #     logger=pets_logger,
+    #     log_frequency=cfg.log_frequency_model,
+    # )
+    #
+    # model_trainer.train(
+    #     num_epochs=cfg.get("num_epochs_train_dyn_model", None),
+    #     patience=cfg.patience,
+    # )
+    # dynamics_model.save(os.getcwd())
+    # log.info("saved model")
+    # exit()
+
+    if "cheetah" in cfg.env:
+        m_path = cfg.model_path_hc
+    else:
+        m_path = cfg.model_path
+    model_cfg = util.get_hydra_cfg(m_path)
     dynamics_model = util.create_dynamics_model(
         model_cfg,
         env.observation_space.shape,
         env.action_space.shape,
-        model_dir=cfg.model_path,
+        model_dir=m_path,
     )
-    data = np.load(cfg.model_path + "/replay_buffer_train.npz")
+    data = np.load(m_path + "replay_buffer_train.npz")
     states = data["obs"]
     # acts = data["action"]
     # TODO add state to the plot of the desired actions distribution
@@ -56,11 +135,6 @@ def run(cfg: omegaconf.DictConfig):
     cfg.planner.action_ub = env.action_space.high.tolist()
     planner = hydra.utils.instantiate(cfg.planner)
 
-    def trajectory_eval_fn(action_sequences):
-        return evaluate_action_sequences_(
-            use_env, obs, action_sequences, true_model=cfg.mpc_true_model
-        )
-
     if cfg.obs_gen == "set":
         obs = np.array(cfg.set_obs)
     elif cfg.obs_gen == "idx":
@@ -68,12 +142,62 @@ def run(cfg: omegaconf.DictConfig):
     else:
         obs = env.reset()
 
+    # obs = env.reset()
+    # planner.reset()
+    # actions_to_use: List[np.ndarray] = []
+    # done = False
+    # total_reward = 0
+    # steps_trial = 0
+    # while not done:
+    #     # ------------- Planning using the learned model ---------------
+    #     plan_time = 0.0
+    #     if not actions_to_use:  # re-plan is necessary
+    #         trajectory_eval_fn = functools.partial(
+    #             model_env.evaluate_action_sequences,
+    #             initial_state=obs,
+    #             num_particles=cfg.num_particles,
+    #             propagation_method=cfg.propagation_method,
+    #         )
+    #         start_time = time.time()
+    #         plan, _ = planner.plan(
+    #             model_env.action_space.shape,
+    #             cfg.planning_horizon,
+    #             trajectory_eval_fn,
+    #         )
+    #         plan_time = time.time() - start_time
+    #
+    #         actions_to_use.extend([a for a in plan[: cfg.replan_freq]])
+    #     action = actions_to_use.pop(0)
+    #
+    #     # --- Doing env step and adding to model dataset ---
+    #     next_obs, reward, done, _ = env.step(action)
+    #     obs = next_obs
+    #     total_reward += reward
+    #     steps_trial += 1
+    #     if steps_trial == cfg.trial_length:
+    #         break
+    #
+    #     if True:
+    #         print(f"Step {steps_trial}: Reward {reward:.3f}. Time: {plan_time:.3f}")
+    #
+    # pets_logger.log("eval/trial", 0, steps_trial)
+    # pets_logger.log("eval/episode_reward", total_reward, steps_trial)
+    #
+    # # max_total_reward = max(max_total_reward, total_reward)
+    # log.info(total_reward)
+
     if cfg.load_actions:
         # state = torch.load(cfg.actions_path + "state.pth")
         actions = torch.load(cfg.actions_path + "actions.pth")
         plans = torch.load(cfg.actions_path + "plans.pth")
         values = torch.load(cfg.actions_path + "values.pth")
     else:
+
+        def trajectory_eval_fn(action_sequences):
+            return evaluate_action_sequences_(
+                use_env, obs, action_sequences, true_model=cfg.mpc_true_model
+            )
+
         actions, plans, values = repeat_mpc(
             use_env, obs, planner, cfg.mpc_repeat, cfg, trajectory_eval_fn
         )
@@ -102,6 +226,7 @@ def repeat_mpc(env, state, controller, repeat, cfg, trajectory_eval_fn):
     plans = []
     actions = []
     values = []
+    log.info(f"evaluating state {state}")
 
     # start_time = time.time()
 
@@ -145,10 +270,10 @@ def repeat_mpc(env, state, controller, repeat, cfg, trajectory_eval_fn):
     if not cfg.mpc_true_model:
         env.dynamics_model.save(dir)
 
-    print(f"mean action {np.mean(np.stack(actions))}")
-    print(f"std action {np.std(np.stack(actions))}")
-    print(f"mean value {np.mean(np.stack(values))}")
-    print(f"std value {np.std(np.stack(values))}")
+    log.info(f"mean action {np.mean(np.stack(actions))}")
+    log.info(f"std action {np.std(np.stack(actions))}")
+    log.info(f"mean value {np.mean(np.stack(values))}")
+    log.info(f"std value {np.std(np.stack(values))}")
 
     return np.stack(actions), np.stack(plans), np.stack(values)
 
@@ -167,41 +292,52 @@ def visualize_plans(plans, dim=None, values=None, bounds=[-1, 1], obs=None):
         {
             "font.family": "serif",
             "font.serif": ["Times"],
-            "font.size": 18,
+            "font.size": 14,
             # 'text.usetex': True,
         }
     )
 
     plt.style.use(latex_style_times)
+    if not dim:
+        d_a = np.shape(plans)[2]
+        if d_a == 1:
+            # 1 dimensional
+            dims = [0]
+        else:
+            dims = np.arange(0, d_a)
 
-    # plt.rcParams["font.family"] = "Times New Roman"
-    fig, ax = plt.subplots()
-    ax.spines["right"].set_visible(False)
-    ax.spines["top"].set_visible(False)
+    for d in dims:
+        # plt.rcParams["font.family"] = "Times New Roman"
+        fig, ax = plt.subplots()
+        ax.spines["right"].set_visible(False)
+        ax.spines["top"].set_visible(False)
+        plt.tight_layout()
 
-    if bounds is not None:
-        ax.set_ylim(bounds)
+        if bounds is not None:
+            ax.set_ylim(bounds)
 
-    len_dat = np.shape(plans)[1]
-    t = np.arange(0, len_dat, 1)
-    # the histogram of the data
+        len_dat = np.shape(plans)[1]
+        t = np.arange(0, len_dat, 1)
+        # the histogram of the data
 
-    for pl in plans:
-        plt.plot(t, pl, color="#7C65D7", alpha=0.7)
-    # add a 'best fit' line
-    # y = mlab.normpdf(bins, mu, sigma)
-    # l = plt.plot(bins, y, 'r--', linewidth=1)
+        for pl in plans:
+            plt.plot(t, pl[:, d], color="#7C65D7", alpha=0.7)
+        # add a 'best fit' line
+        # y = mlab.normpdf(bins, mu, sigma)
+        # l = plt.plot(bins, y, 'r--', linewidth=1)
 
-    plt.ylabel("Action")
-    plt.xlabel("Timestep")
-    if obs is not None:
-        plt.title(f"Obs: {obs}")
-    # plt.axis([40, 160, 0, 0.03])
-    plt.grid(False)
+        plt.ylabel("Action")
+        plt.xlabel("Timestep")
+        # if obs is not None:
+        #     plt.title(f"Obs: {obs}")
+        # plt.axis([40, 160, 0, 0.03])
+        plt.grid(False)
+        # plt.text(0.3, 1.05, "obs:" + str(np.round(obs, 4)), size="small", transform=ax.transAxes)
+        plt.text(0.3, 1.0, "dim:" + str(d), size="small", transform=ax.transAxes)
+        plt.text(0.3, 0.95, os.getcwd()[-16:], size="small", transform=ax.transAxes)
 
-    plt.savefig("plans.pdf")
-    # maybe use evaluate action sequence on model
-    return 0
+        plt.savefig(f"plot_plans_d{d}.pdf")
+        # maybe use evaluate action sequence on model
 
 
 def visualize_actions(actions, dims=None, values=None, bounds=[-1, 1], obs=None):
@@ -213,7 +349,7 @@ def visualize_actions(actions, dims=None, values=None, bounds=[-1, 1], obs=None)
             # 1 dimensional
             dims = [0]
         else:
-            dims = [0, 1]
+            dims = np.arange(0, d_a)
 
     if values is not None:
         plt.rcParams["font.family"] = "Times"
@@ -222,21 +358,42 @@ def visualize_actions(actions, dims=None, values=None, bounds=[-1, 1], obs=None)
         ax.spines["top"].set_visible(False)
 
         # the histogram of the data
-        n, bins, patches = plt.hist(actions, 25, facecolor="#D76565", alpha=0.75)
+        weights = np.ones_like(values) / float(len(values))
+        n, bins, patches = plt.hist(
+            values, bins=25, facecolor="#D76565", alpha=0.75, weights=weights
+        )
 
         # add a 'best fit' line
         # y = mlab.normpdf(bins, mu, sigma)
         # l = plt.plot(bins, y, 'r--', linewidth=1)
 
         plt.xlabel("Values")
-        plt.ylabel("Count")
+        plt.ylabel("Probability")
         # plt.title(r'$\mathrm{Histogram\ of\ IQ:}\ \mu=100,\ \sigma=15$')
         # plt.axis([40, 160, 0, 0.03])
         plt.grid(False)
 
-        plt.savefig("values.pdf")
+        # add obs, mean, var for logging easily
+        # plt.text(0.1, 1, "obs:" + str(np.round(obs,4)), size="small", transform=ax.transAxes)
+        plt.text(
+            0.6,
+            1,
+            "mean: " + str(np.round(np.mean(values), 4)),
+            size="small",
+            transform=ax.transAxes,
+        )
+        plt.text(
+            0.6,
+            0.95,
+            "stdev: " + str(np.round(np.std(values), 4)),
+            size="small",
+            transform=ax.transAxes,
+        )
+        plt.text(0.1, 0.95, os.getcwd()[-16:], size="small", transform=ax.transAxes)
 
-    if len(dims) == 1:
+        plt.savefig("plot_values.pdf")
+
+    for d in dims:
         # number line of actions
         plt.rcParams["font.family"] = "Times"
         fig, ax = plt.subplots()
@@ -244,7 +401,27 @@ def visualize_actions(actions, dims=None, values=None, bounds=[-1, 1], obs=None)
         ax.spines["top"].set_visible(False)
 
         # the histogram of the data
-        n, bins, patches = plt.hist(actions, 25, facecolor="green", alpha=0.75)
+        weights = np.ones_like(values) / float(len(values))
+        n, bins, patches = plt.hist(
+            actions[:, d], bins=25, facecolor="green", alpha=0.75, weights=weights
+        )
+        # plt.text(0.1, 1, "obs:" + str(np.round(obs, 4)), size="small", transform=ax.transAxes)
+        plt.text(0.1, 1, "dim:" + str(d), size="small", transform=ax.transAxes)
+        plt.text(
+            0.6,
+            1,
+            "mean: " + str(np.round(np.mean(actions[:, d]), 4)),
+            size="small",
+            transform=ax.transAxes,
+        )
+        plt.text(
+            0.6,
+            0.95,
+            "stdev: " + str(np.round(np.std(actions[:, d]), 4)),
+            size="small",
+            transform=ax.transAxes,
+        )
+        plt.text(0.1, 0.95, os.getcwd()[-16:], size="small", transform=ax.transAxes)
 
         # add a 'best fit' line
         # y = mlab.normpdf(bins, mu, sigma)
@@ -253,14 +430,15 @@ def visualize_actions(actions, dims=None, values=None, bounds=[-1, 1], obs=None)
             ax.set_xlim(bounds)
 
         plt.xlabel("Actions")
-        plt.ylabel("Count")
-        if obs is not None:
-            plt.title(f"Obs: {obs}")
+        plt.ylabel("Probability")
+        # if obs is not None:
+        #     plt.title(f"Obs: {obs}")
+
         # plt.axis([40, 160, 0, 0.03])
         plt.grid(False)
 
-        plt.savefig("action_1d.pdf")
-        return
+        plt.savefig(f"plot_action_d{d}.pdf")
+        # return
 
     # if len(dims) == 2:
     #     # 2d plot of actions

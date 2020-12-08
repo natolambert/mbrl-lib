@@ -95,12 +95,16 @@ class CartPoleEnv(gym.Env):
         self.seed()
         self.viewer = None
         self.state = None
+        # self._elapsed_steps = 0
 
         self.steps_beyond_done = None
 
     def seed(self, seed=None):
         self.np_random, seed = seeding.np_random(seed)
         return [seed]
+
+    def set_state(self, state):
+        self.state = state
 
     def step(self, action):
         action = action.squeeze()
@@ -155,7 +159,7 @@ class CartPoleEnv(gym.Env):
                 )
             self.steps_beyond_done += 1
             reward = 0.0
-
+        # reward = -(self.state[0]**2 + self.state[2]**2)
         return np.array(self.state), reward, done, {}
 
     def reset(self):
