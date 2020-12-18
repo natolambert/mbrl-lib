@@ -1,0 +1,13 @@
+# @package _group_
+env: "gym___kuka-allegro-v0"
+term_fn: "cartpole"
+learned_rewards: false
+trial_length: 1000
+num_trials: 10000
+
+model_lr: 5.0e-4
+model_wd: 1.5e-5
+model_batch_size: 128
+validation_ratio: 0.20
+# num_epochs_train_model: 4
+patience: 50

@@ -2,7 +2,7 @@ defaults:
   - algorithm: pets
   - agent: sac
   - dynamics_model: ensemble
-  - overrides: pets_cartpole
+  - overrides: pets_ball_rolling # pets_ipv2 # pets_cartpole
 
 seed: 0
 device: "cuda:0"

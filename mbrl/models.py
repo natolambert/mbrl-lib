@@ -1,5 +1,6 @@
 import abc
 import itertools
+import functools
 import pathlib
 from typing import Dict, List, Optional, Sequence, Tuple, Union, cast
 
@@ -95,6 +96,8 @@ class GaussianMLP(Model):
         num_layers: int = 4,
         hid_size: int = 200,
         use_silu: bool = False,
+        min_logvar_init = np.log(0.01 ** 2),
+        max_logvar_init = np.log(1.28 ** 2),
     ):
         super(GaussianMLP, self).__init__(in_size, out_size, device)
         activation_cls = nn.SiLU if use_silu else nn.ReLU
@@ -106,10 +109,10 @@ class GaussianMLP(Model):
         self.hidden_layers = nn.Sequential(*hidden_layers)
         self.mean_and_logvar = nn.Linear(hid_size, 2 * out_size)
         self.min_logvar = nn.Parameter(
-            -10 * torch.ones(1, out_size, requires_grad=True)
+            min_logvar_init * torch.ones(1, out_size, requires_grad=True)
         )
         self.max_logvar = nn.Parameter(
-            0.5 * torch.ones(1, out_size, requires_grad=True)
+            max_logvar_init * torch.ones(1, out_size, requires_grad=True)
         )
         self.out_size = out_size
 
@@ -128,7 +131,11 @@ class GaussianMLP(Model):
     def loss(self, model_in: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         pred_mean, pred_logvar = self.forward(model_in)
         nll = mbrl.math.gaussian_nll(pred_mean, pred_logvar, target)
-        return nll + 0.01 * self.max_logvar.sum() - 0.01 * self.min_logvar.sum()
+        loss = nll + 0.01 * self.max_logvar.sum() - 0.01 * self.min_logvar.sum()
+
+        # normalize the loss by output dimension (eaiser to interpret)
+        loss = loss / self.out_size
+        return loss
 
     def eval_score(self, model_in: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         with torch.no_grad():
@@ -259,6 +266,7 @@ class Ensemble(Model):
             model.train()
             optimizers[i].zero_grad()
             loss = model.loss(inputs[i], targets[i])
+            # print(f"{i}-th model's loss = {loss}")
             loss.backward()
             optimizers[i].step(None)
             avg_ensemble_loss += loss.item()
@@ -509,12 +517,17 @@ class DynamicsModelTrainer:
         )
         best_val_score = self.evaluate(use_train_set=not has_val_dataset)
         for epoch in epoch_iter:
-            total_avg_loss = 0.0
-            for bootstrap_batch in self.dataset_train:
+            avg_losses = []
+            for i, bootstrap_batch in enumerate(self.dataset_train):
+                batch_size = bootstrap_batch[0][0].shape[0]
                 avg_ensemble_loss = update_from_batch_fn(
                     bootstrap_batch, self.optimizers
                 )
-                total_avg_loss += avg_ensemble_loss
+                # each batch has different size, append avg_ensemble_loss * batch_size
+                avg_losses.append(avg_ensemble_loss * batch_size)
+
+            # take the mean of loss over the whole dataset_train
+            total_avg_loss = sum(avg_losses) / self.dataset_train.num_stored
             training_losses.append(total_avg_loss)
 
             train_score = self.evaluate(use_train_set=True)
@@ -593,6 +606,80 @@ class ModelEnv:
         reward_fn,
         seed=None,
     ):
+        if env.spec and env.spec.id == "kuka-allegro-v0":
+            obs_space = env.observation_space
+            unwrapped = env.unwrapped
+
+            pos_id = env.state_indices["obj_pose"]["position"].astype(int)
+            ori_id = env.state_indices["obj_pose"]["orientation"].astype(int)
+            # t_ori_id = env.state_indices["target_orientation"].astype(int)
+            EPS = 1e-7
+
+            obj_init_position = torch.Tensor(unwrapped.obj.init_base_position).cuda()
+            target_orientation = torch.Tensor([0., 0., 1., 0.]).cuda()
+
+            self.cache = {}
+
+            def normalize(x):
+                norm = (x ** 2).sum(-1, keepdim=True) ** 0.5 + 1e-12
+                return x / norm
+
+            def compute_theta(obs):
+                orientation = obs[..., ori_id]
+                # FIXME(poweic): Got norm(target_orientation) > 1 !!!!!
+                # target_orientation is part of the states so that a policy can act based on its goal.
+                # But it should NOT be part of the state prediction!!! It should be fixed!!
+                # target_orientation = obs[..., t_ori_id]
+
+                orientation = normalize(orientation)
+                inner_prod = (orientation * target_orientation).sum(dim=-1)
+                # assert inner_prod.abs().max() < 1.01
+                theta = 2 * torch.acos(inner_prod.abs().clamp(min=0.0, max=1.0 - EPS))
+                return theta
+
+            def is_dropped(obs):
+                position = obs[..., pos_id]
+                diff = position - obj_init_position
+                dropped = (diff.abs() > unwrapped.max_dist_consider_dropped).any(dim=-1)
+                return dropped
+
+            def _termination_fn(act, next_obs):
+                theta = self.cache['theta']
+                dropped = self.cache['dropped']
+                goal_reached = self.cache['goal_reached']
+
+                done = dropped | goal_reached
+                done = done[:, None]
+
+                assert done.ndim == 2 and done.shape[0] == act.shape[0]
+                return done
+
+            def _reward_fn(act, next_obs, obs):
+                theta = compute_theta(next_obs)
+                prev_theta = compute_theta(obs)
+                reward = prev_theta - theta
+
+                dropped = is_dropped(next_obs)
+                reward -= dropped * unwrapped.dropped_penalty
+                reward += (~dropped) * unwrapped.alive_bonus
+
+                goal_reached = theta < unwrapped.proximity_threshold
+                reward += goal_reached * unwrapped.success_bonus
+                # print (f"goal_reached: {goal_reached.float().mean() * 100:.2f} %")
+                # print (f"reward: max = {reward.max()}, min = {reward.min()}, mean = {reward.mean()}")
+
+                self.cache['theta'] = theta
+                self.cache['dropped'] = dropped
+                self.cache['goal_reached'] = goal_reached
+
+                assert reward.ndim == 1 and reward.shape[0] == act.shape[0]
+                return reward
+
+            termination_fn = _termination_fn
+            reward_fn = _reward_fn
+            print (f"termination_fn: {termination_fn}")
+            print (f"reward_fn: {reward_fn}")
+
         self.dynamics_model = model
         self.termination_fn = termination_fn
         self.reward_fn = reward_fn
@@ -651,7 +738,7 @@ class ModelEnv:
             rewards = (
                 pred_rewards
                 if self.reward_fn is None
-                else self.reward_fn(actions, next_observs)
+                else self.reward_fn(actions, next_observs, self._current_obs)
             )
             dones = self.termination_fn(actions, next_observs)
             self._current_obs = next_observs
@@ -689,6 +776,7 @@ class ModelEnv:
                 actions_for_step, num_particles, dim=0
             )
             _, rewards, _, _ = self.step(action_batch, sample=True)
+            # print (f"time step {time_step}, rewards = {rewards}")
             total_rewards += rewards
 
         total_rewards = total_rewards.reshape(-1, num_particles)

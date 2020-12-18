@@ -1,7 +1,7 @@
 import pathlib
 from typing import Callable, Dict, Optional, Sequence, Tuple, Union, cast
 
-import dmc2gym.wrappers
+# import dmc2gym.wrappers
 import gym
 import gym.envs.mujoco
 import gym.wrappers
@@ -372,6 +372,7 @@ def populate_buffers_with_agent_trajectories(
     n_train = int(steps_to_collect * (1 - val_ratio))
     indices_train = set(indices[:n_train])
 
+    action_space = env.action_space
     step = 0
     while True:
         obs = env.reset()
@@ -380,7 +381,8 @@ def populate_buffers_with_agent_trajectories(
             which_dataset = (
                 env_dataset_train if step in indices_train else env_dataset_test
             )
-            next_obs, *_, = step_env_and_populate_dataset(
+
+            next_obs, reward, done, _ = step_env_and_populate_dataset(
                 env,
                 obs,
                 agent,
@@ -388,6 +390,7 @@ def populate_buffers_with_agent_trajectories(
                 which_dataset,
                 normalizer_callback=normalizer_callback,
             )
+
             obs = next_obs
             step += 1
             if step == steps_to_collect:

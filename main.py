@@ -8,6 +8,7 @@ import mbrl.mbpo as mbpo
 import mbrl.pets as pets
 import mbrl.util as util
 
+import tactile_envs
 
 @hydra.main(config_path="conf", config_name="main")
 def run(cfg: omegaconf.DictConfig):

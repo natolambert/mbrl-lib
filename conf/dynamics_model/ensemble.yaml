@@ -13,5 +13,5 @@ member_cfg:
   num_layers: 4
   in_size: ${dynamics_model.model.in_size}
   out_size: ${dynamics_model.model.out_size}
-  hid_size: 200
+  hid_size: 256
   use_silu: true

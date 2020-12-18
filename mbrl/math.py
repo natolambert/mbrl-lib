@@ -9,15 +9,30 @@ import torch.nn.functional as F
 
 import mbrl.types
 
+# _data = {'counter': 0}
 
 def gaussian_nll(
     pred_mean: torch.Tensor, pred_logvar: torch.Tensor, target: torch.Tensor
 ) -> torch.Tensor:
+    """
+    The lower the logvar (ex: logvar = -5), the smaller standard deviation, which
+    makes the (pred_mean - target) more standard deviations away. Hence making
+    l2 * inv_var larger.
+    """
     l2 = F.mse_loss(pred_mean, target, reduction="none")
     inv_var = (-pred_logvar).exp()
     losses = l2 * inv_var + pred_logvar
-    return losses.sum(dim=1).mean()
 
+    '''
+    _data['counter'] += 1
+    if _data['counter'] % 1000 == 0:
+        print (f"pred_logvar[0]: {pred_logvar[0]}")
+        print (f"inv_var[0]: {inv_var[0]}")
+        print (f"l2[0]: {l2[0]}")
+        print (f"losses[0]: {losses[0]}")
+    '''
+
+    return losses.sum(dim=1).mean()
 
 # inplace truncated normal function for pytorch.
 # Taken from https://discuss.pytorch.org/t/implementing-truncated-normal-initializer/4778/16
