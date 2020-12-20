@@ -769,14 +769,16 @@ class ModelEnv:
             initial_obs_batch, propagation_method=propagation_method, return_as_np=False
         )
 
+        # torch.expand does not allocate new memory and is about 3-4% faster
+        # than torch.repeat_interleave(actions_for_step, num_particles, dim=0)
+        def repeat_interleave(x, n):
+            return x[:, None, :].expand(-1, n, -1).reshape(-1, x.shape[-1])
+
         total_rewards: torch.Tensor = 0
         for time_step in range(horizon):
             actions_for_step = action_sequences[:, time_step, :]
-            action_batch = torch.repeat_interleave(
-                actions_for_step, num_particles, dim=0
-            )
+            action_batch = repeat_interleave(actions_for_step, num_particles)
             _, rewards, _, _ = self.step(action_batch, sample=True)
-            # print (f"time step {time_step}, rewards = {rewards}")
             total_rewards += rewards
 
         total_rewards = total_rewards.reshape(-1, num_particles)
