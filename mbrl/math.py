@@ -58,6 +58,9 @@ class Stats:
     m2: Union[float, torch.Tensor]
     count: int
 
+    def astuple(self):
+        return self.mean, self.m2, self.count
+
 
 class Normalizer:
     _STATS_FNAME = "env_stats.pickle"
@@ -73,7 +76,7 @@ class Normalizer:
     def update_stats(self, val: Union[float, mbrl.types.TensorType]):
         if isinstance(val, np.ndarray):
             val = torch.from_numpy(val).to(self.device)
-        mean, m2, count = dataclasses.astuple(self.stats)
+        mean, m2, count = self.stats.astuple()
         count = count + 1
         delta = val - mean
         mean += delta / count
@@ -88,7 +91,7 @@ class Normalizer:
     ) -> Union[float, mbrl.types.TensorType]:
         if isinstance(val, np.ndarray):
             val = torch.from_numpy(val).to(self.device)
-        mean, m2, count = dataclasses.astuple(self.stats)
+        mean, m2, count = self.stats.astuple()
         if count > 1:
             std = torch.sqrt(m2 / (count - 1))
             return (val - mean) / std
@@ -99,7 +102,7 @@ class Normalizer:
     ) -> Union[float, mbrl.types.TensorType]:
         if isinstance(val, np.ndarray):
             val = torch.from_numpy(val).to(self.device)
-        mean, m2, count = dataclasses.astuple(self.stats)
+        mean, m2, count = self.stats.astuple()
         if count > 1:
             std = torch.sqrt(m2 / (count - 1))
             return std * val + mean
@@ -115,7 +118,7 @@ class Normalizer:
             )
 
     def save(self, save_dir: Union[str, pathlib.Path]):
-        mean, m2, count = dataclasses.astuple(self.stats)
+        mean, m2, count = self.stats.astuple()
         save_dir = pathlib.Path(save_dir)
         with open(save_dir / self._STATS_FNAME, "wb") as f:
             pickle.dump(
