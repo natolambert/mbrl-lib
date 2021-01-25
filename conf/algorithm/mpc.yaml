@@ -1,0 +1,52 @@
+# @package _group_
+name: "mpc"
+
+model_path_hc: /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/162704/ #/home/hiro/mbrl/exp/ref/halfcheetah/ #/home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/162704/ # /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/161225/ #
+  # HC normalized /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/162704/
+  # HC unnorm /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/161225/
+  # HC from Luis /home/hiro/mbrl/exp/ref/
+# discrete rew /home/hiro/mbrl/exp/pets/debug/cartpole_continuous/2020.11.30/0759/
+#/home/hiro/mbrl/exp/pets/debug/cartpole_continuous/2020.11.16/1312/
+#/checkpoint/nol/mbrl/exp/pets/debug/cartpole_continuous/2020.11.15/0951/
+actions_path: #/checkpoint/nol/mbrl/exp/pets/debug_mpc/cartpole_continuous/2020.11.20/1048/
+
+load_actions: false
+mpc_true_model: false
+mpc_repeat: 200
+debug_mode: true
+
+obs_gen: idx
+obs_idx: 25
+obs_set: [ -2, -0.05, -0.05, 0 ]
+
+obs_process_fn: mbrl.env.pets_halfcheetah.HalfCheetahEnv.preprocess_fn
+
+agent:
+  _target_: mbrl.planning.TrajectoryOptimizerAgent
+  action_lb: ???
+  action_ub: ???
+  planning_horizon: 15
+  optimizer_cfg: ${algorithm.optimizer}
+  replan_freq: 1
+  verbose: ${debug_mode}
+
+optimizer:
+  _target_: mbrl.planning.CEMOptimizer
+  num_iterations: 5
+  elite_ratio: 0.1
+  population_size: 500
+  alpha: 0.1
+  lower_bound: ???
+  upper_bound: ???
+  device: ${device}
+
+normalize: true
+target_is_delta: true
+increase_val_set: true
+dataset_size: ???
+initial_exploration_steps: ${overrides.trial_length}
+freq_train_model: 1234567890  # PETS always  trains at the start of each trial
+learned_rewards: ${overrides.learned_rewards}
+
+num_particles: 25
+propagation_method: "fixed_model"

@@ -9,6 +9,7 @@ import torch
 
 # import pytorch_sac
 import mbrl.util as util
+
 import gym
 import mbrl.models as models
 import time
@@ -47,12 +48,12 @@ EVAL_LOG_FORMAT = [
 ]
 
 
-@hydra.main(config_path="conf", config_name="personal_mpc")  # personal_
+@hydra.main(config_path="conf", config_name="main")  # personal_
 def run(cfg: omegaconf.DictConfig):
     log.info(omegaconf.OmegaConf.to_yaml(cfg))
     env, term_fn, reward_fn = util.make_env(cfg)
     env.seed(cfg.seed)
-    env = gym.wrappers.TimeLimit(env, max_episode_steps=cfg.trial_length)
+    env = gym.wrappers.TimeLimit(env, max_episode_steps=cfg.overrides.trial_length)
     env._elapsed_steps = 0
     env.reset()
 
@@ -109,11 +110,11 @@ def run(cfg: omegaconf.DictConfig):
     # log.info("saved model")
     # exit()
 
-    if "cheetah" in cfg.env:
+    if "cheetah" in cfg.overrides.env:
         m_path = cfg.model_path_hc
     else:
         m_path = cfg.model_path
-    model_cfg = util.get_hydra_cfg(m_path)
+    model_cfg = util.load_hydra_cfg(m_path)
     dynamics_model = util.create_dynamics_model(
         model_cfg,
         env.observation_space.shape,
@@ -174,7 +175,7 @@ def run(cfg: omegaconf.DictConfig):
     #     obs = next_obs
     #     total_reward += reward
     #     steps_trial += 1
-    #     if steps_trial == cfg.trial_length:
+    #     if steps_trial == cfg.overrides.trial_length:
     #         break
     #
     #     if True:

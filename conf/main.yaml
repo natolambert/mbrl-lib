@@ -4,6 +4,10 @@ defaults:
   - dynamics_model: ensemble
   - overrides: pets_cartpole
 
+model_path: /home/hiro/mbrl/exp/pets/pets/cartpole_continuous/2020.11.30/1050/
+model_path_hc: /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/162704/ #/home/hiro/mbrl/exp/ref/halfcheetah/ #/home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/162704/ # /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/161225/ #
+
+
 seed: 0
 device: "cuda:0"
 log_frequency_model: 1
@@ -16,3 +20,6 @@ experiment: default
 hydra:
   run:
     dir: ./exp/${algorithm.name}/${experiment}/${overrides.env}/${now:%Y.%m.%d}/${now:%H%M}
+  sweep:
+    dir: ./exp/${algorithm.name}/${experiment}/${overrides.env}/${now:%Y.%m.%d}/${now:%H%M%S} #/checkpoint/nol/mbrl/exp/pets/${experiment}/${env}/${now:%Y.%m.%d}/${now:%H%M}
+    subdir: ${hydra.job.override_dirname}/${hydra.job.num}
