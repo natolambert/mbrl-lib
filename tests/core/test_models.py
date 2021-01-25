@@ -6,10 +6,10 @@ import pytest
 import torch
 import torch.nn as nn
 
-import mbrl.models as models
+import mbrl.models
 
 
-def test_gaussian_ensemble_forward():
+def test_basic_ensemble_gaussian_forward():
     model_in_size = 2
     model_out_size = 2
     member_cfg = omegaconf.OmegaConf.create(
@@ -20,13 +20,13 @@ def test_gaussian_ensemble_forward():
             "out_size": model_out_size,
         }
     )
-    ensemble = models.Ensemble(
+    ensemble = mbrl.models.BasicEnsemble(
         2, model_in_size, model_out_size, torch.device("cpu"), member_cfg
     )
     batch_size = 4
     model_in = torch.zeros(batch_size, 2)
 
-    member_out_mean_ex, member_out_var_ex = ensemble[0](model_in)
+    member_out_mean_ex, member_out_var_ex = ensemble[0].forward(model_in)
     assert member_out_mean_ex.shape == torch.Size([batch_size, model_out_size])
     assert member_out_var_ex.shape == torch.Size([batch_size, model_out_size])
 
@@ -50,13 +50,116 @@ def test_gaussian_ensemble_forward():
     assert model_out[1].sum().item() == 2 * expected_tensor_sum
 
 
-mock_obs_dim = 1
-mock_act_dim = 1
+_OUTPUT_FACTOR = 10
+
+
+def _create_gaussian_ensemble_mock(ensemble_size, as_float=False):
+    model = mbrl.models.GaussianMLP(
+        1, 1, "cpu", num_layers=2, ensemble_size=ensemble_size
+    )
+
+    # With this we can use the output value to identify which model produced the output
+    def mock_fwd(_x):
+        output = _x.clone()
+        if output.shape[0] == 1:
+            output = output.repeat(ensemble_size, 1, 1)
+        for i in range(ensemble_size):
+            output[i] += i
+        if as_float:
+            return output.float(), output.float()
+        return output.int(), output.int()
+
+    model._default_forward = mock_fwd
+
+    return model
+
+
+def _check_output_counts_and_update_history(
+    model_output, ensemble_size, batch_size, history
+):
+    counts = np.zeros(ensemble_size)
+    for i in range(batch_size):
+        model_idx = model_output[i].item() % ensemble_size
+        counts[model_idx] += 1
+        history[i] += str(model_idx)
+    # assert that all models produced the same number of outputs
+    for i in range(ensemble_size):
+        assert counts[i] == batch_size // ensemble_size
+    # this checks that each output values correspond to the input
+    # at the same index
+    for i, v in enumerate(model_output):
+        assert int(v.item()) // _OUTPUT_FACTOR == i
+    return history
+
+
+def test_gaussian_mlp_ensemble_random_model_propagation():
+    ensemble_size = 5
+    model = _create_gaussian_ensemble_mock(ensemble_size)
+
+    batch_size = 100
+    num_reps = 200
+    batch = _OUTPUT_FACTOR * torch.arange(batch_size).view(-1, 1)
+    history = ["" for _ in range(batch_size)]
+    with torch.no_grad():
+        for _ in range(num_reps):
+            y = model.forward(batch, propagation="random_model")[0]
+            history = _check_output_counts_and_update_history(
+                y, ensemble_size, batch_size, history
+            )
+    # This is really hacky, but it's a cheap test to see if the history of models used
+    # varied over the batch
+    seen = set([h for h in history])
+    assert len(seen) == batch_size
+
+
+def test_gaussian_mlp_ensemble_fixed_model_propagation():
+    ensemble_size = 5
+    model = _create_gaussian_ensemble_mock(ensemble_size)
+
+    batch_size = 100
+    num_reps = 200
+    batch = _OUTPUT_FACTOR * torch.arange(batch_size).view(-1, 1)
+    history = ["" for _ in range(batch_size)]
+    indices = model.sample_propagation_indices(batch_size, None)
+    with torch.no_grad():
+        for _ in range(num_reps):
+            y = model.forward(
+                batch, propagation="fixed_model", propagation_indices=indices
+            )[0]
+            history = _check_output_counts_and_update_history(
+                y, ensemble_size, batch_size, history
+            )
+            for i in range(batch_size):
+                assert history[i][-1] == history[i][0]
+
+
+def test_gaussian_mlp_ensemble_expectation_propagation():
+    ensemble_size = 5
+    model = _create_gaussian_ensemble_mock(ensemble_size, as_float=True)
+
+    batch_size = 100
+    num_reps = 200
+    batch = _OUTPUT_FACTOR * torch.arange(batch_size).view(-1, 1)
+    with torch.no_grad():
+        for _ in range(num_reps):
+            y = model.forward(batch, propagation="expectation")[0]
+            for i in range(batch_size):
+                val = y[i].item()
+                a = val // _OUTPUT_FACTOR
+                b = val % _OUTPUT_FACTOR
+                assert a == i
+                np.testing.assert_almost_equal(
+                    b, ensemble_size * (ensemble_size - 1) / ensemble_size / 2
+                )
+
+
+_MOCK_OBS_DIM = 1
+_MOCK_ACT_DIM = 1
 
 
 class MockEnv:
-    observation_space = (mock_obs_dim,)
-    action_space = (mock_act_dim,)
+    observation_space = (_MOCK_OBS_DIM,)
+    action_space = (_MOCK_ACT_DIM,)
 
 
 class MockProbModel(nn.Module):
@@ -79,17 +182,17 @@ def mock_term_fn(act, next_obs):
 
 def get_mock_env():
     member_cfg = omegaconf.OmegaConf.create(
-        {"_target_": "tests.test_models.MockProbModel"}
+        {"_target_": "tests.core.test_models.MockProbModel"}
     )
     num_members = 3
-    ensemble = models.Ensemble(
+    ensemble = mbrl.models.BasicEnsemble(
         num_members,
-        mock_obs_dim + mock_act_dim,
-        mock_obs_dim + 1,
+        _MOCK_OBS_DIM + _MOCK_ACT_DIM,
+        _MOCK_OBS_DIM + 1,
         torch.device("cpu"),
         member_cfg,
     )
-    dynamics_model = models.DynamicsModelWrapper(
+    dynamics_model = mbrl.models.DynamicsModelWrapper(
         ensemble, target_is_delta=True, normalize=False, obs_process_fn=None
     )
     # With value we can uniquely id the output of each member
@@ -97,17 +200,17 @@ def get_mock_env():
     for i in range(num_members):
         ensemble.members[i].value = member_incs[i]
 
-    model_env = models.ModelEnv(MockEnv(), dynamics_model, mock_term_fn, None)
+    model_env = mbrl.models.ModelEnv(MockEnv(), dynamics_model, mock_term_fn, None)
     return model_env, member_incs
 
 
 def test_model_env_expectation_propagation():
     batch_size = 7
     model_env, member_incs = get_mock_env()
-    init_obs = np.zeros((batch_size, mock_obs_dim)).astype(np.float32)
+    init_obs = np.zeros((batch_size, _MOCK_OBS_DIM)).astype(np.float32)
     model_env.reset(initial_obs_batch=init_obs, propagation_method="expectation")
 
-    action = np.zeros((batch_size, mock_act_dim)).astype(np.float32)
+    action = np.zeros((batch_size, _MOCK_ACT_DIM)).astype(np.float32)
     prev_sum = 0
     for i in range(10):
         next_obs, reward, *_ = model_env.step(action, sample=False)
@@ -121,10 +224,10 @@ def test_model_env_expectation_propagation():
 def test_model_env_expectation_random():
     batch_size = 100
     model_env, member_incs = get_mock_env()
-    obs = np.zeros((batch_size, mock_obs_dim)).astype(np.float32)
+    obs = np.zeros((batch_size, _MOCK_OBS_DIM)).astype(np.float32)
     model_env.reset(initial_obs_batch=obs, propagation_method="random_model")
 
-    action = np.zeros((batch_size, mock_act_dim)).astype(np.float32)
+    action = np.zeros((batch_size, _MOCK_ACT_DIM)).astype(np.float32)
     num_steps = 50
     history = ["" for _ in range(batch_size)]
     for i in range(num_steps):
@@ -151,10 +254,10 @@ def test_model_env_expectation_random():
 def test_model_env_expectation_fixed():
     batch_size = 100
     model_env, member_incs = get_mock_env()
-    obs = np.zeros((batch_size, mock_obs_dim)).astype(np.float32)
+    obs = np.zeros((batch_size, _MOCK_OBS_DIM)).astype(np.float32)
     model_env.reset(initial_obs_batch=obs, propagation_method="fixed_model")
 
-    action = np.zeros((batch_size, mock_act_dim)).astype(np.float32)
+    action = np.zeros((batch_size, _MOCK_ACT_DIM)).astype(np.float32)
     num_steps = 50
     history = ["" for _ in range(batch_size)]
     for i in range(num_steps):

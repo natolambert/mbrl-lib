@@ -3,12 +3,13 @@ import pathlib
 from typing import Optional, cast
 
 import numpy as np
-import pytorch_sac
 
+import mbrl.logger
 import mbrl.models
 import mbrl.planning
 import mbrl.replay_buffer
 import mbrl.util
+import mbrl.util.mujoco as mujoco_util
 
 LOG_FORMAT = [
     ("epoch", "E", "int"),
@@ -29,7 +30,7 @@ class FineTuner:
         new_model: bool = False,
     ):
         self.cfg = mbrl.util.load_hydra_cfg(model_dir)
-        self.env, self.term_fn, self.reward_fn = mbrl.util.make_env(self.cfg)
+        self.env, self.term_fn, self.reward_fn = mujoco_util.make_env(self.cfg)
         self.dynamics_model = mbrl.util.create_dynamics_model(
             self.cfg,
             self.env.observation_space.shape,
@@ -67,14 +68,7 @@ class FineTuner:
             self.rng,
         )
 
-        logger = pytorch_sac.Logger(
-            self.outdir,
-            save_tb=False,
-            log_frequency=None,
-            agent="finetunig",
-            train_format=LOG_FORMAT,
-            eval_format=LOG_FORMAT,
-        )
+        logger = mbrl.logger.Logger(self.outdir)
 
         model_trainer = mbrl.models.DynamicsModelTrainer(
             self.dynamics_model,

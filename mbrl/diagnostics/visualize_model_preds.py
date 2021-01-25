@@ -11,6 +11,7 @@ import mbrl
 import mbrl.models
 import mbrl.planning
 import mbrl.util
+import mbrl.util.mujoco as mujoco_util
 
 VisData = Tuple[np.ndarray, np.ndarray, np.ndarray, np.ndarray, np.ndarray]
 
@@ -20,8 +21,8 @@ class Visualizer:
         self,
         lookahead: int,
         results_dir: str,
-        agent_dir: str,
-        agent_type: str,
+        reference_agent_type: Optional[str] = None,
+        reference_agent_dir: Optional[str] = None,
         num_steps: Optional[int] = None,
         num_model_samples: int = 1,
         model_subdir: Optional[str] = None,
@@ -29,12 +30,12 @@ class Visualizer:
         self.lookahead = lookahead
         self.results_path = pathlib.Path(results_dir)
         self.model_path = self.results_path
-        self.agent_path = pathlib.Path(agent_dir)
         self.vis_path = self.results_path / "diagnostics"
         if model_subdir:
             self.model_path /= model_subdir
+            # If model subdir is child of diagnostics, remove "diagnostics" before
+            # appending to vis_path
             if "diagnostics" in model_subdir:
-                # The model may have been created by another diagnostics script
                 model_subdir = pathlib.Path(model_subdir).name
             self.vis_path /= model_subdir
         pathlib.Path.mkdir(self.vis_path, exist_ok=True)
@@ -44,12 +45,17 @@ class Visualizer:
 
         self.cfg = mbrl.util.load_hydra_cfg(self.results_path)
 
-        self.env, term_fn, reward_fn = mbrl.util.make_env(self.cfg)
-        self.reference_agent = mbrl.planning.load_agent(
-            self.agent_path,
-            self.env,
-            agent_type,
-        )
+        self.env, term_fn, reward_fn = mujoco_util.make_env(self.cfg)
+
+        if reference_agent_type:
+            self.agent_path = pathlib.Path(reference_agent_dir)
+            self.reference_agent = mbrl.planning.load_agent(
+                self.agent_path,
+                self.env,
+                reference_agent_type,
+            )
+        else:
+            self.reference_agent = None
         self.reward_fn = reward_fn
 
         self.dynamics_model = mbrl.util.create_dynamics_model(
@@ -88,19 +94,19 @@ class Visualizer:
                 agent=self.agent,
                 num_samples=self.num_model_samples,
             )
-            real_obses, real_rewards, _ = mbrl.util.rollout_env(
+            real_obses, real_rewards, _ = mujoco_util.rollout_mujoco_env(
                 cast(gym.wrappers.TimeLimit, self.env),
                 obs,
-                self.reference_agent,
                 self.lookahead,
+                agent=self.reference_agent,
                 plan=actions,
             )
         else:
-            real_obses, real_rewards, actions = mbrl.util.rollout_env(
+            real_obses, real_rewards, actions = mujoco_util.rollout_mujoco_env(
                 cast(gym.wrappers.TimeLimit, self.env),
                 obs,
-                self.reference_agent,
                 self.lookahead,
+                agent=self.reference_agent,
             )
             model_obses, model_rewards, _ = mbrl.util.rollout_model_env(
                 self.model_env,
@@ -201,7 +207,8 @@ class Visualizer:
 
     def run(self):
         self.create_axes()
-        for use_mpc in [True, False]:
+        mpc_cases = [True, False] if self.reference_agent else [True]
+        for use_mpc in mpc_cases:
             ani = animation.FuncAnimation(
                 self.fig,
                 self.plot_func,
@@ -229,16 +236,16 @@ if __name__ == "__main__":
     parser.add_argument(
         "--num_model_samples",
         type=int,
-        default=32,
+        default=35,
         help="Number of samples from the model, to visualize uncertainty.",
     )
     args = parser.parse_args()
 
     visualizer = Visualizer(
-        lookahead=30,
+        lookahead=25,
         results_dir=args.experiments_dir,
-        agent_dir=args.agent_dir,
-        agent_type=args.agent_type,
+        reference_agent_dir=args.agent_dir,
+        reference_agent_type=args.agent_type,
         num_steps=args.num_steps,
         num_model_samples=args.num_model_samples,
         model_subdir=args.model_subdir,

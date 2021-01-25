@@ -1,33 +1,32 @@
 import os
-from typing import cast
+from typing import List, cast
 
 import gym
 import numpy as np
 import omegaconf
-import pytorch_sac
 
-import mbrl.models as models
+import mbrl.logger
+import mbrl.math
+import mbrl.models
 import mbrl.planning
-import mbrl.replay_buffer as replay_buffer
+import mbrl.replay_buffer
 import mbrl.types
 import mbrl.util
-
-PETS_LOG_FORMAT = [
-    ("episode", "E", "int"),
-    ("step", "S", "int"),
-    ("rollout_length", "RL", "int"),
-    ("train_dataset_size", "TD", "int"),
-    ("val_dataset_size", "VD", "int"),
-    ("model_loss", "MLOSS", "float"),
-    ("model_score", "MSCORE", "float"),
-    ("model_val_score", "MVSCORE", "float"),
-    ("model_best_val_score", "MBVSCORE", "float"),
-]
 
 EVAL_LOG_FORMAT = [
     ("trial", "T", "int"),
     ("episode_reward", "R", "float"),
 ]
+
+
+def get_rollout_schedule(cfg: omegaconf.DictConfig) -> List[int]:
+    max_horizon = cfg.overrides.get(
+        "max_planning_horizon", cfg.algorithm.agent.planning_horizon
+    )
+    if "trial_reach_max_horizon" in cfg.overrides:
+        return [1, cfg.overrides.trial_reach_max_horizon, 1, max_horizon]
+    else:
+        return [1, cfg.overrides.num_trials, max_horizon, max_horizon]
 
 
 def train(
@@ -45,25 +44,19 @@ def train(
     rng = np.random.default_rng(seed=cfg.seed)
 
     work_dir = os.getcwd()
-    logger = pytorch_sac.Logger(
-        work_dir,
-        save_tb=False,
-        log_frequency=None,
-        agent="pets",
-        train_format=PETS_LOG_FORMAT,
-        eval_format=EVAL_LOG_FORMAT,
-    )
-
+    logger = mbrl.logger.Logger(work_dir)
     dynamics_model = mbrl.util.create_dynamics_model(cfg, obs_shape, act_shape)
+
+    logger.register_group("pets_eval", EVAL_LOG_FORMAT, color="green")
 
     # -------- Create and populate initial env dataset --------
     dataset_train, dataset_val = mbrl.util.create_replay_buffers(
         cfg,
         obs_shape,
         act_shape,
-        train_is_bootstrap=hasattr(cfg.dynamics_model.model, "ensemble_size"),
+        train_is_bootstrap=(cfg.dynamics_model.model.get("ensemble_size", 1) > 1),
     )
-    dataset_train = cast(replay_buffer.BootstrapReplayBuffer, dataset_train)
+    dataset_train = cast(mbrl.replay_buffer.BootstrapReplayBuffer, dataset_train)
     mbrl.util.populate_buffers_with_agent_trajectories(
         env,
         dataset_train,
@@ -74,21 +67,17 @@ def train(
         {},
         rng,
         trial_length=cfg.overrides.trial_length,
-        normalizer_callback=dynamics_model.update_normalizer,
+        callback=dynamics_model.update_normalizer,
     )
     mbrl.util.save_buffers(dataset_train, dataset_val, work_dir)
 
     # ---------------------------------------------------------
     # ---------- Create model environment and agent -----------
-    model_env = models.ModelEnv(
+    model_env = mbrl.models.ModelEnv(
         env, dynamics_model, termination_fn, reward_fn, seed=cfg.seed
     )
-    model_trainer = models.DynamicsModelTrainer(
-        dynamics_model,
-        dataset_train,
-        dataset_val=dataset_val,
-        logger=logger,
-        log_frequency=cfg.log_frequency_model,
+    model_trainer = mbrl.models.DynamicsModelTrainer(
+        dynamics_model, dataset_train, dataset_val=dataset_val, logger=logger
     )
 
     agent = mbrl.planning.create_trajectory_optim_agent_for_model(
@@ -105,7 +94,12 @@ def train(
     max_total_reward = -np.inf
     for trial in range(cfg.overrides.num_trials):
         obs = env.reset()
-        agent.reset()
+
+        planning_horizon = int(
+            mbrl.math.truncated_linear(*(get_rollout_schedule(cfg) + [trial]))
+        )
+
+        agent.reset(planning_horizon=planning_horizon)
         done = False
         total_reward = 0.0
         steps_trial = 0
@@ -119,24 +113,19 @@ def train(
                     dataset_train,
                     dataset_val,
                     work_dir,
-                    env_steps,
-                    logger,
                 )
 
             # --- Doing env step using the agent and adding to model dataset ---
-            dataset_to_update = mbrl.util.select_dataset_to_update(
-                dataset_train,
-                dataset_val,
-                cfg.algorithm.increase_val_set,
-                cfg.overrides.validation_ratio,
-                rng,
-            )
             next_obs, reward, done, _ = mbrl.util.step_env_and_populate_dataset(
                 env,
                 obs,
                 agent,
                 {},
-                dataset_to_update,
+                dataset_train,
+                dataset_val,
+                cfg.algorithm.increase_val_set,
+                cfg.overrides.validation_ratio,
+                rng,
                 dynamics_model.update_normalizer,
             )
 
@@ -150,9 +139,9 @@ def train(
             if debug_mode:
                 print(f"Step {env_steps}: Reward {reward:.3f}.")
 
-        logger.log("eval/trial", current_trial, env_steps)
-        logger.log("eval/episode_reward", total_reward, env_steps)
-        logger.dump(env_steps, save=True)
+        logger.log_data(
+            "pets_eval", {"trial": current_trial, "episode_reward": total_reward}
+        )
         current_trial += 1
 
         max_total_reward = max(max_total_reward, total_reward)
