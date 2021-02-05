@@ -1,0 +1,36 @@
+defaults:
+  - algorithm: pets
+  - dynamics_model: gaussian_mlp_ensemble
+  - overrides: pets_cartpole
+
+model_path: /home/hiro/mbrl/exp/pets/default/cartpole_continuous/2021.01.26/1056/
+model_path_hc: /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/162704/ #/home/hiro/mbrl/exp/ref/halfcheetah/ #/home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/162704/ # /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/161225/ #
+
+policy:
+  model:
+#    _target_: mbrl.models.GaussianMLP
+    _target_: mbrl.models.BasicEnsemble
+    device: ${device}
+    num_layers: 4
+    in_size: ???
+    out_size: ???
+    ensemble_size: 1
+    hid_size: 200
+    use_silu: true
+
+seed: 0
+device: "cuda:0"
+log_frequency_agent: 1000
+save_video: false
+debug_mode: false
+
+experiment: default
+
+root_dir: "./exp"
+hydra:
+  run:
+    dir: ./exp/${algorithm.name}/${experiment}/${overrides.env}/${now:%Y.%m.%d}/${now:%H%M%S}
+  sweep:
+    dir: ./exp/${algorithm.name}/${experiment}/${overrides.env}/${now:%Y.%m.%d}/${now:%H%M%S} #/checkpoint/nol/mbrl/exp/pets/${experiment}/${env}/${now:%Y.%m.%d}/${now:%H%M}
+    subdir: ${hydra.job.override_dirname}/${hydra.job.num}
+#    dir: ${root_dir}/${algorithm.name}/${experiment}/${overrides.env}/${now:%Y.%m.%d}/${now:%H%M}
