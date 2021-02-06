@@ -16,6 +16,7 @@ from torch.nn import functional as F
 
 import mbrl.math
 import mbrl.types
+# from mbrl.timeit import timeit
 
 from . import replay_buffer
 
@@ -739,6 +740,7 @@ class ModelEnv:
                 pred_rewards
                 if self.reward_fn is None
                 else self.reward_fn(actions, next_observs, self._current_obs)
+                # else self.reward_fn(actions, next_observs)
             )
             dones = self.termination_fn(actions, next_observs)
             self._current_obs = next_observs
@@ -751,6 +753,7 @@ class ModelEnv:
     def render(self, mode="human"):
         pass
 
+    # @timeit
     def evaluate_action_sequences(
         self,
         action_sequences: torch.Tensor,

@@ -15,6 +15,7 @@ import torch.distributions
 import mbrl.math
 import mbrl.models
 import mbrl.types
+# from mbrl.timeit import timeit
 
 
 # ------------------------------------------------------------------------ #
@@ -109,7 +110,7 @@ class CEMOptimizer:
             if best_values[0] > best_value:
                 best_value = best_values[0]
                 best_solution = population[elite_idx[0]].clone()
-            self._update_history(i, values, mu, best_solution, history)
+            # self._update_history(i, values, mu, best_solution, history)
 
         return best_solution, history
 
@@ -141,15 +142,18 @@ class TrajectoryOptimizer:
         self, trajectory_eval_fn: Callable[[torch.Tensor], torch.Tensor]
     ) -> Tuple[np.ndarray, float]:
 
-        best_solution, opt_history = self.optimizer.optimize(
-            trajectory_eval_fn,
-            self.x_shape,
-            initial_mu=self.previous_solution,
-        )
-        self.previous_solution = best_solution.roll(-self.replan_freq, dims=0)
-        # Note that initial_solution[i] is the same for all values of [i],
-        # so just pick i = 0
-        self.previous_solution[-self.replan_freq :] = self.initial_solution[0]
+        with torch.no_grad():
+            best_solution, opt_history = self.optimizer.optimize(
+                trajectory_eval_fn,
+                self.x_shape,
+                initial_mu=self.previous_solution,
+            )
+            self.previous_solution = best_solution.roll(-self.replan_freq, dims=0)
+            # Note that initial_solution[i] is the same for all values of [i],
+            # so just pick i = 0
+            self.previous_solution[-self.replan_freq :] = self.initial_solution[0]
+
+
         return best_solution.cpu().numpy(), opt_history["value_maxs"].max()
 
     def reset(self):
@@ -234,6 +238,7 @@ class TrajectoryOptimizerAgent(Agent):
 
             start_time = time.time()
             plan, _ = self.optimizer.optimize(trajectory_eval_fn)
+            # timeit.summarize()
             plan_time = time.time() - start_time
 
             self.actions_to_use.extend([a for a in plan[: self.replan_freq]])
