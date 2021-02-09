@@ -113,10 +113,10 @@ class PolicyWrapper:
         obs, action, *_ = transition
         if obs.ndim == 1:
             obs = obs[None, :]
-            action = action[None, :]
+            # action = action[None, :]
         if self.obs_process_fn:
             obs = self.obs_process_fn(obs)
-        model_in_np = np.concatenate([obs, action], axis=1)
+        model_in_np = obs  # np.concatenate([obs, action], axis=1)
         if self.normalizer:
             self.normalizer.update_stats(model_in_np)
 
@@ -145,8 +145,15 @@ class PolicyWrapper:
 
         model_ins = []
         targets = []
-        for i, batch in enumerate(bootstrap_batch):
-            model_in, target = self._get_model_input_and_target_from_batch(batch)
+        if self.model.num_members > 1:
+            for i, batch in enumerate(bootstrap_batch):
+                model_in, target = self._get_model_input_and_target_from_batch(batch)
+                model_ins.append(model_in)
+                targets.append(target)
+        else:
+            model_in, target = self._get_model_input_and_target_from_batch(
+                bootstrap_batch
+            )
             model_ins.append(model_in)
             targets.append(target)
         model_ins = torch.stack(model_ins)
@@ -191,7 +198,7 @@ class PolicyWrapper:
     def predict(
         self,
         obs: torch.Tensor,
-        actions: torch.Tensor,
+        # actions: torch.Tensor,
         sample: bool = True,
         propagation_method: str = "expectation",
         propagation_indices: Optional[torch.Tensor] = None,

@@ -3,7 +3,7 @@ defaults:
   - dynamics_model: gaussian_mlp_ensemble
   - overrides: pets_cartpole
 
-model_path: /home/hiro/mbrl/exp/pets/pets/cartpole_continuous/2020.11.30/1050/
+model_path: /home/hiro/mbrl/exp/pets/default/cartpole_continuous/2021.01.26/1056/
 model_path_hc: /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/162704/ #/home/hiro/mbrl/exp/ref/halfcheetah/ #/home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/162704/ # /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/161225/ #
 
 

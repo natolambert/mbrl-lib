@@ -1,0 +1,17 @@
+# @package _group_
+model:
+  _target_: mbrl.models.BasicEnsemble
+  ensemble_size: 1
+  in_size: ???
+  out_size: ???
+  member_cfg: ${policy.member_cfg}
+  device: ${device}
+
+member_cfg:
+  _target_: mbrl.models.GaussianMLP
+  device: ${device}
+  num_layers: 4
+  in_size: ${policy.model.in_size}
+  out_size: ${policy.model.out_size}
+  hid_size: 200
+  use_silu: true

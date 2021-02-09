@@ -92,6 +92,34 @@ def create_dynamics_model(
     return dynamics_model
 
 
+def create_policy(
+    cfg: omegaconf.DictConfig,
+    obs_shape: Tuple[int],
+    act_shape: Tuple[int],
+    model_dir: Optional[Union[str, pathlib.Path]] = None,
+):
+    if cfg.policy.model.get("in_size", None) is None:
+        cfg.policy.model.in_size = obs_shape[0]
+    if cfg.policy.model.get("out_size", None) is None:
+        cfg.policy.model.out_size = act_shape[0]
+    model = hydra.utils.instantiate(cfg.policy.model)
+
+    name_obs_process_fn = cfg.overrides.get("obs_process_fn", None)
+    if name_obs_process_fn:
+        obs_process_fn = hydra.utils.get_method(cfg.overrides.obs_process_fn)
+    else:
+        obs_process_fn = None
+    policy = mbrl.models.PolicyWrapper(
+        model,
+        normalize=cfg.algorithm.normalize,
+        obs_process_fn=obs_process_fn,
+    )
+    if model_dir:
+        policy.load(model_dir)
+
+    return policy
+
+
 def load_hydra_cfg(results_dir: Union[str, pathlib.Path]) -> omegaconf.DictConfig:
     """Loads a Hydra configuration from the given directory path.
 
@@ -220,6 +248,40 @@ def save_buffers(
     work_path = pathlib.Path(work_dir)
     train_buffer.save(str(work_path / f"{prefix}_train"))
     val_buffer.save(str(work_path / f"{prefix}_val"))
+
+
+def train_policy_and_save_model_and_data(
+    policy: mbrl.models.PolicyWrapper,
+    model_trainer: mbrl.models.PolicyTrainer,
+    cfg: omegaconf.DictConfig,
+    dataset_train: mbrl.replay_buffer.SimpleReplayBuffer,
+    dataset_val: mbrl.replay_buffer.SimpleReplayBuffer,
+    work_dir: Union[str, pathlib.Path],
+):
+    """Convenience function for training a model and saving results.
+
+    Runs `model_trainer.train()`, then saves the resulting model and the data used.
+
+    Args:
+        dynamics_model (:class:`mbrl.models.DynamicsModelWrapper`): the model to train.
+        model_trainer (:class:`mbrl.models.DynamicsModelTrainer`): the model trainer.
+        cfg (:class:`omegaconf.DictConfig`): configuration to use for training.
+            Fields ``cfg.overrides.num_epochs_train_model`` and ``cfg.overrides.patience``
+            will be passed to the model trainer (as ``num_epochs`` and ``patience`` kwargs,
+            respectively).
+        dataset_train (:class:`mbrl.replay_buffer.SimpleReplayBuffer`): the dataset to use
+            for training.
+        dataset_val (:class:`mbrl.replay_buffer.SimpleReplayBuffer`): the dataset to use
+            for validation.
+        work_dir (str or pathlib.Path): directory to save model and datasets to.
+
+    """
+    model_trainer.train(
+        num_epochs=cfg.overrides.get("num_epochs_train_model", None),
+        patience=cfg.overrides.patience,
+    )
+    policy.save(work_dir)
+    save_buffers(dataset_train, dataset_val, work_dir)
 
 
 def train_model_and_save_model_and_data(

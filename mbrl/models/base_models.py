@@ -165,6 +165,7 @@ class Model(nn.Module):
         model_in: torch.Tensor,
         target: torch.Tensor,
         optimizer: Union[torch.optim.Optimizer, Sequence[torch.optim.Optimizer]],
+        weights: Optional[torch.Tensor] = None,
     ) -> float:
         """Updates the model using backpropagation with given input and target tensors.
 
@@ -185,7 +186,10 @@ class Model(nn.Module):
         optimizer = cast(torch.optim.Optimizer, optimizer)
         self.train()
         optimizer.zero_grad()
-        loss = self.loss(model_in, target)
+        if weights is not None:
+            loss = self.loss(model_in, target, weights)
+        else:
+            loss = self.loss(model_in, target)
         loss.backward()
         optimizer.step(None)
         return loss.item()

@@ -211,7 +211,12 @@ class GaussianMLP(base_models.Model):
             )
         return self._default_forward(x)
 
-    def loss(self, model_in: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def loss(
+        self,
+        model_in: torch.Tensor,
+        target: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """Computes Gaussian NLL loss.
 
         It also includes terms for ``max_logvar`` and ``min_logvar`` with small weights,
@@ -226,6 +231,8 @@ class GaussianMLP(base_models.Model):
                 where ``E``, ``B`` and ``Od`` represent ensemble size, batch size, and output
                 dimension, respectively. For non-ensemble, the shape is as above, except
                 with the model dimension removed (``E``).
+            weights (tensor): pre-computed weights corresponding to the batch. SHape must be
+                ``B`` so each batch has a corresponding pre-computed weight
 
         Returns:
             (tensor): a loss tensor representing the Gaussian negative log-likelihood of

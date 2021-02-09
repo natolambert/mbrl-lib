@@ -285,6 +285,25 @@ class Agent:
         pass
 
 
+class ImitativeAgent(Agent):
+    """An agent that generates actions by imitating a logged dataset.
+
+    Args:
+        env (gym.Env): the environment on which the agent will act.
+    """
+
+    def __init__(self, policy: mbrl.models.policies.PolicyWrapper):
+        self.policy = policy
+
+    def act(self, obs: np.ndarray, *_args, **_kwargs) -> np.ndarray:
+        """Issues an action given an observation.
+
+        Returns:
+            (np.ndarray): an action sampled from the environment's action space.
+        """
+        return self.policy.predict(obs)[0].cpu().detach().numpy()
+
+
 class RandomAgent(Agent):
     """An agent that samples action from the environments action space.
 
@@ -295,7 +314,7 @@ class RandomAgent(Agent):
     def __init__(self, env: gym.Env):
         self.env = env
 
-    def act(self, *_args, **_kwargs) -> np.ndarray:
+    def act(self, obs: np.ndarray, *_args, **_kwargs) -> np.ndarray:
         """Issues an action given an observation.
 
         Returns:
