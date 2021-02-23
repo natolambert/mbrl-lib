@@ -41,15 +41,15 @@ class GaussianMLP(base_models.Model):
     """
 
     def __init__(
-        self,
-        in_size: int,
-        out_size: int,
-        device: Union[str, torch.device],
-        num_layers: int = 4,
-        ensemble_size: int = 1,
-        hid_size: int = 200,
-        use_silu: bool = False,
-        deterministic: bool = False,
+            self,
+            in_size: int,
+            out_size: int,
+            device: Union[str, torch.device],
+            num_layers: int = 4,
+            ensemble_size: int = 1,
+            hid_size: int = 200,
+            use_silu: bool = False,
+            deterministic: bool = False,
     ):
         super().__init__(in_size, out_size, device)
         activation_cls = nn.SiLU if use_silu else nn.ReLU
@@ -97,7 +97,7 @@ class GaussianMLP(base_models.Model):
         self.to(self.device)
 
     def _default_forward(
-        self, x: torch.Tensor, **_kwargs
+            self, x: torch.Tensor, **_kwargs
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         x = self.hidden_layers(x)
         mean_and_logvar = self.mean_and_logvar(x)
@@ -105,13 +105,13 @@ class GaussianMLP(base_models.Model):
             return mean_and_logvar, None
         else:
             mean = mean_and_logvar[..., : self.out_size]
-            logvar = mean_and_logvar[..., self.out_size :]
+            logvar = mean_and_logvar[..., self.out_size:]
             logvar = self.max_logvar - F.softplus(self.max_logvar - logvar)
             logvar = self.min_logvar + F.softplus(logvar - self.min_logvar)
             return mean, logvar
 
     def _forward_from_indices(
-        self, x: torch.Tensor, model_indices: torch.Tensor
+            self, x: torch.Tensor, model_indices: torch.Tensor
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         _, batch_size, _ = x.shape
 
@@ -131,11 +131,11 @@ class GaussianMLP(base_models.Model):
         return mean, logvar
 
     def _forward_ensemble(
-        self,
-        x: torch.Tensor,
-        propagation: Optional[str] = None,
-        propagation_indices: Optional[torch.Tensor] = None,
-        rng: Optional[torch.Generator] = None,
+            self,
+            x: torch.Tensor,
+            propagation: Optional[str] = None,
+            propagation_indices: Optional[torch.Tensor] = None,
+            rng: Optional[torch.Generator] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         if propagation is None:
             return self._default_forward(x)
@@ -160,11 +160,11 @@ class GaussianMLP(base_models.Model):
         raise ValueError(f"Invalid propagation method {propagation}.")
 
     def forward(  # type: ignore
-        self,
-        x: torch.Tensor,
-        propagation: Optional[str] = None,
-        propagation_indices: Optional[torch.Tensor] = None,
-        rng: Optional[torch.Generator] = None,
+            self,
+            x: torch.Tensor,
+            propagation: Optional[str] = None,
+            propagation_indices: Optional[torch.Tensor] = None,
+            rng: Optional[torch.Generator] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Computes mean and logvar predictions for the given input.
 
@@ -222,14 +222,6 @@ class GaussianMLP(base_models.Model):
             )
         return self._default_forward(x)
 
-<<<<<<< HEAD
-    def loss(
-        self,
-        model_in: torch.Tensor,
-        target: torch.Tensor,
-        weights: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-=======
     def _mse_loss(self, model_in: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         pred_mean, _ = self.forward(model_in)
         if self.is_ensemble:
@@ -251,7 +243,7 @@ class GaussianMLP(base_models.Model):
             for i in range(self.num_members):
                 member_loss = mbrl.math.gaussian_nll(pred_mean, pred_logvar, target)
                 member_loss += (
-                    0.01 * self.max_logvar[i].sum() - 0.01 * self.min_logvar[i].sum()
+                        0.01 * self.max_logvar[i].sum() - 0.01 * self.min_logvar[i].sum()
                 )
                 nll += member_loss
             return nll / self.num_members
@@ -260,8 +252,12 @@ class GaussianMLP(base_models.Model):
             nll = mbrl.math.gaussian_nll(pred_mean, pred_logvar, target)
             return nll + 0.01 * self.max_logvar.sum() - 0.01 * self.min_logvar.sum()
 
-    def loss(self, model_in: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
->>>>>>> b4e57e28d4130f8d4cc18887ade49772d193a894
+    def loss(
+            self,
+            model_in: torch.Tensor,
+            target: torch.Tensor,
+            weights: Optional[torch.Tensor] = None,
+    ) -> torch.Tensor:
         """Computes Gaussian NLL loss.
 
         It also includes terms for ``max_logvar`` and ``min_logvar`` with small weights,
@@ -285,9 +281,10 @@ class GaussianMLP(base_models.Model):
             the average over all models.
         """
         if self.deterministic:
-            return self._mse_loss(model_in, target)
+            loss = self._mse_loss(model_in, target)
         else:
-            return self._nll_loss(model_in, target)
+            loss = self._nll_loss(model_in, target)
+        return  torch.multiply(weights, loss)
 
     def eval_score(self, model_in: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """Computes the squared error for the model over the given input/target.
@@ -328,7 +325,7 @@ class GaussianMLP(base_models.Model):
         return self.num_members
 
     def sample_propagation_indices(
-        self, batch_size: int, _rng: torch.Generator
+            self, batch_size: int, _rng: torch.Generator
     ) -> torch.Tensor:
         """Returns a random permutation of integers in [0, ``batch_size``)."""
         if batch_size % len(self) != 0:
