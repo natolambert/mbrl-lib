@@ -106,7 +106,21 @@ def run(cfg: omegaconf.DictConfig):
         )
         a_old = []
         a_new = []
-        for batch in data_val:
+        rs = []
+        data_new, data_new_val = common_util.create_replay_buffers(
+            cfg, env.observation_space.shape, env.action_space.shape
+        )
+        data_new.num_members = 1
+        data_new = cast(mbrl.replay_buffer.BootstrapReplayBuffer, data_new)
+        data_new_val.num_members = 1
+        data_new_val = cast(mbrl.replay_buffer.BootstrapReplayBuffer, data_new_val)
+
+        print(f"... Training datset of length {len(data)}")
+        for n, batch in enumerate(data):
+            if n % 50 == 0:
+                print(f"... recomuption on datapoint {n+1}")
+            if len(batch) == 1:
+                batch = batch[0]
             obs, action_old, next_obs, reward, done = batch
             # NOTE, the training data does NOT contain all of the actions in order
             if done:
@@ -115,6 +129,8 @@ def run(cfg: omegaconf.DictConfig):
             action = agent.act(obs)
             a_old.append(action_old)
             a_new.append(action)
+            rs.append(reward)
+            data_new.add(obs, action, next_obs, reward, done)
             # trajectory_eval_fn = functools.partial(
             #     env.evaluate_action_sequences,
             #     initial_state=obs,
@@ -126,20 +142,52 @@ def run(cfg: omegaconf.DictConfig):
             #     cfg.planning_horizon,
             #     trajectory_eval_fn,
             # )
+
+        for batch in data_val:
+            if len(batch) == 1:
+                batch = batch[0]
+            obs, action_old, next_obs, reward, done = batch
+            # NOTE, the training data does NOT contain all of the actions in order
+            if done:
+                agent.reset(planning_horizon=20)
+
+            action = agent.act(obs)
+            data_new_val.add(obs, action, next_obs, reward, done)
+            # trajectory_eval_fn = functools.partial(
+            #     env.evaluate_action_sequences,
+            #     initial_state=obs,
+            #     num_particles=cfg.num_particles,
+            #     propagation_method=cfg.propagation_method,
+            # )
+            # action_sequence, pred_val = controller.plan(
+            #     env.action_space.shape,
+            #     cfg.planning_horizon,
+            #     trajectory_eval_fn,
+            # )
+
         a_old_n = np.array(a_old)
         a_new_n = np.array(a_new)
+        data_new.save(m_path + "_recompute")
         np.savez(m_path + "action_old.npz", a_old_n)
         np.savez(m_path + "action_new.npz", a_new_n)
-        visualize_actions(a_old_n, str="old")
-        visualize_actions(a_new_n, str="new")
+
+        if False:
+            visualize_actions(a_old_n, values=np.stack(rs), st="old")
+            visualize_actions(a_new_n, values=np.stack(rs), st="new")
+
+        if True:
+            policy, policy_trainer = create_policy(
+                cfg, env, data_new, data_new_val, logger
+            )
+
+            # train imitative policy
+            common_util.train_policy_and_save_model_and_data(
+                policy, policy_trainer, cfg, data_new, data_new_val, os.getcwd()
+            )
+            agent_reactive = ImitativeAgent(policy)
+            rews = run_trials_pol(cfg, agent_reactive, env, policy, data, data_val, rng)
 
     elif cfg.mode == "imitate":
-        # creates imitative polict object
-        policy = common_util.create_policy(
-            cfg,
-            env.observation_space.shape,
-            env.action_space.shape,
-        )
 
         # load data
         data, data_val = common_util.create_replay_buffers(
@@ -155,10 +203,7 @@ def run(cfg: omegaconf.DictConfig):
         # data = np.load(m_path + "replay_buffer_train.npz")
         # data_val = np.load(m_path + "replay_buffer_val.npz")
 
-        # policy trainer like model trainer
-        policy_trainer = mbrl.models.PolicyTrainer(
-            policy, data, dataset_val=data_val, logger=logger
-        )
+        policy, policy_trainer = create_policy(cfg, env, data, data_val, logger)
 
         # train imitative policy
         common_util.train_policy_and_save_model_and_data(
@@ -166,44 +211,7 @@ def run(cfg: omegaconf.DictConfig):
         )
 
         agent_reactive = ImitativeAgent(policy)
-        rs = []
-        for i in range(cfg.num_eval):
-            agent_reactive.reset()
-
-            obs = env.reset()
-            done = False
-            total_reward = 0.0
-            steps_trial = 0
-            env_steps = 0
-            cum_reward = 0
-            while not done:
-                # --- Doing env step using the agent and adding to model dataset ---
-                next_obs, reward, done, _ = mbrl.util.step_env_and_populate_dataset(
-                    env,
-                    obs.astype(np.float32),
-                    agent_reactive,
-                    {},
-                    data,
-                    data_val,
-                    cfg.algorithm.increase_val_set,
-                    cfg.overrides.validation_ratio,
-                    rng,
-                    policy.update_normalizer,
-                )
-
-                obs = next_obs
-                total_reward += reward
-                steps_trial += 1
-                env_steps += 1
-                cum_reward += reward
-                if steps_trial == cfg.overrides.trial_length:
-                    break
-
-                if debug_mode:
-                    print(f"Step {env_steps}: Reward {reward:.3f}.")
-            print(f"Cumulative reward {cum_reward}")
-            rs.append(cum_reward)
-        print(f"Summary: mean {np.mean(rs)}, sdt {np.std(rs)}")
+        rews = run_trials_pol(cfg, agent_reactive, env, policy, data, data_val, rng)
 
     elif cfg.mode == "mpc":
 
@@ -249,59 +257,117 @@ def run(cfg: omegaconf.DictConfig):
         visualize_plans(plans, obs=obs)
         visualize_actions(actions, values=values, obs=obs)
 
-    # Old code below
-    # # HC setup
-    # pets_logger = pytorch_sac.Logger(
-    #     os.getcwd(),
-    #     save_tb=False,
-    #     log_frequency=None,
-    #     agent="pets",
-    #     train_format=PETS_LOG_FORMAT,
-    #     eval_format=EVAL_LOG_FORMAT,
-    # )
-    # obs_shape = env.observation_space.shape
-    # act_shape = env.action_space.shape
-    # from typing import cast, List
-    # import mbrl.replay_buffer as replay_buffer
-    # import mbrl
+        # Old code below
+        # # HC setup
+        # pets_logger = pytorch_sac.Logger(
+        #     os.getcwd(),
+        #     save_tb=False,
+        #     log_frequency=None,
+        #     agent="pets",
+        #     train_format=PETS_LOG_FORMAT,
+        #     eval_format=EVAL_LOG_FORMAT,
+        # )
+        # obs_shape = env.observation_space.shape
+        # act_shape = env.action_space.shape
+        # from typing import cast, List
+        # import mbrl.replay_buffer as replay_buffer
+        # import mbrl
 
-    # env_dataset_train, env_dataset_val = mbrl.util.create_ensemble_buffers(
-    #     cfg, obs_shape, act_shape
-    # )
-    # env_dataset_train = cast(replay_buffer.BootstrapReplayBuffer, env_dataset_train)
-    # env_dataset_train.load("/home/hiro/mbrl/exp/ref/halfcheetah/pets_replay_buffer_train.npz")
-    # env_dataset_val.load("/home/hiro/mbrl/exp/ref/halfcheetah/pets_replay_buffer_val.npz")
-    # dynamics_model = mbrl.util.create_dynamics_model(cfg, obs_shape, act_shape)
-    # # name_obs_process_fn = "mbrl.env.pets_halfcheetah.HalfCheetahEnv.preprocess_fn"
-    # #cfg.get("obs_process_fn", None)
-    # # name_obs_process_fn = cfg.get("obs_process_fn", None)
-    # # if name_obs_process_fn:
-    # #     obs_process_fn = hydra.utils.get_method(cfg.obs_process_fn)
-    # # else:
-    # #     obs_process_fn = None
-    # # dynamics_model = mbrl.models.DynamicsModelWrapper(
-    # #     dynamics_model.model,
-    # #     target_is_delta=cfg.target_is_delta,
-    # #     normalize=cfg.normalize,
-    # #     learned_rewards=cfg.learned_rewards,
-    # #     obs_process_fn=obs_process_fn,
-    # #     no_delta_list=cfg.get("no_delta_list", None),
-    # # )
-    # model_trainer = models.EnsembleTrainer(
-    #     dynamics_model,
-    #     env_dataset_train,
-    #     dataset_val=env_dataset_val,
-    #     logger=pets_logger,
-    #     log_frequency=cfg.log_frequency_model,
-    # )
-    #
-    # model_trainer.train(
-    #     num_epochs=cfg.get("num_epochs_train_dyn_model", None),
-    #     patience=cfg.patience,
-    # )
-    # dynamics_model.save(os.getcwd())
-    # log.info("saved model")
-    # exit()
+        # env_dataset_train, env_dataset_val = mbrl.util.create_ensemble_buffers(
+        #     cfg, obs_shape, act_shape
+        # )
+        # env_dataset_train = cast(replay_buffer.BootstrapReplayBuffer, env_dataset_train)
+        # env_dataset_train.load("/home/hiro/mbrl/exp/ref/halfcheetah/pets_replay_buffer_train.npz")
+        # env_dataset_val.load("/home/hiro/mbrl/exp/ref/halfcheetah/pets_replay_buffer_val.npz")
+        # dynamics_model = mbrl.util.create_dynamics_model(cfg, obs_shape, act_shape)
+        # # name_obs_process_fn = "mbrl.env.pets_halfcheetah.HalfCheetahEnv.preprocess_fn"
+        # #cfg.get("obs_process_fn", None)
+        # # name_obs_process_fn = cfg.get("obs_process_fn", None)
+        # # if name_obs_process_fn:
+        # #     obs_process_fn = hydra.utils.get_method(cfg.obs_process_fn)
+        # # else:
+        # #     obs_process_fn = None
+        # # dynamics_model = mbrl.models.DynamicsModelWrapper(
+        # #     dynamics_model.model,
+        # #     target_is_delta=cfg.target_is_delta,
+        # #     normalize=cfg.normalize,
+        # #     learned_rewards=cfg.learned_rewards,
+        # #     obs_process_fn=obs_process_fn,
+        # #     no_delta_list=cfg.get("no_delta_list", None),
+        # # )
+        # model_trainer = models.EnsembleTrainer(
+        #     dynamics_model,
+        #     env_dataset_train,
+        #     dataset_val=env_dataset_val,
+        #     logger=pets_logger,
+        #     log_frequency=cfg.log_frequency_model,
+        # )
+        #
+        # model_trainer.train(
+        #     num_epochs=cfg.get("num_epochs_train_dyn_model", None),
+        #     patience=cfg.patience,
+        # )
+        # dynamics_model.save(os.getcwd())
+        # log.info("saved model")
+        # exit()
+
+
+def run_trials_pol(cfg, agent, env, policy, data_train, data_val, rng):
+    rs = []
+    for i in range(cfg.num_eval):
+        agent.reset()
+
+        obs = env.reset()
+        done = False
+        total_reward = 0.0
+        steps_trial = 0
+        env_steps = 0
+        cum_reward = 0
+        while not done:
+            # --- Doing env step using the agent and adding to model dataset ---
+            next_obs, reward, done, _ = mbrl.util.step_env_and_populate_dataset(
+                env,
+                obs.astype(np.float32),
+                agent,
+                {},
+                data_train,
+                data_val,
+                cfg.algorithm.increase_val_set,
+                cfg.overrides.validation_ratio,
+                rng,
+                policy.update_normalizer,
+            )
+
+            obs = next_obs
+            total_reward += reward
+            steps_trial += 1
+            env_steps += 1
+            cum_reward += reward
+            if steps_trial == cfg.overrides.trial_length:
+                break
+
+            if cfg.debug_mode:
+                print(f"Step {env_steps}: Reward {reward:.3f}.")
+        print(f"Cumulative reward {cum_reward}")
+        rs.append(cum_reward)
+    print(f"Summary: mean {np.mean(rs)}, sdt {np.std(rs)}")
+    return np.stack(rs)
+
+
+def create_policy(cfg, env, data_train, data_val, logger):
+    # creates imitative polict object
+    policy = common_util.create_policy(
+        cfg,
+        env.observation_space.shape,
+        env.action_space.shape,
+    )
+
+    # policy trainer like model trainer
+    policy_trainer = mbrl.models.PolicyTrainer(
+        policy, data_train, dataset_val=data_val, logger=logger
+    )
+
+    return policy, policy_trainer
 
 
 def repeat_mpc(env, state, controller, repeat, cfg, trajectory_eval_fn):
@@ -423,7 +489,7 @@ def visualize_plans(plans, dim=None, values=None, bounds=[-1, 1], obs=None):
 
 
 def visualize_actions(
-    actions, dims=None, values=None, bounds=[-1, 1], obs=None, str=None
+    actions, dims=None, values=None, bounds=[-1, 1], obs=None, st=None
 ):
     # Either 1 or 2 d for now
     plt.tight_layout()
@@ -521,7 +587,7 @@ def visualize_actions(
         # plt.axis([40, 160, 0, 0.03])
         plt.grid(False)
 
-        plt.savefig(f"plot_action_d{d}{str}.pdf")
+        plt.savefig(f"plot_action_d{d}{st}.pdf")
         # return
 
     # if len(dims) == 2:

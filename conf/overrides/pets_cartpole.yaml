@@ -2,7 +2,7 @@
 env: "cartpole_continuous"
 learned_rewards: false
 trial_length: 200
-num_trials: 100
+num_trials: 25
 
 model_lr: 1e-4
 model_wd: 1e-5

@@ -1,10 +1,14 @@
 defaults:
-  - algorithm: pets
+  - algorithm: mpc
   - dynamics_model: gaussian_mlp_ensemble
   - policy: gaussian_mlp #basic_ensemble #
   - overrides: mpc_cartpole
 
-model_path: /home/hiro/mbrl/exp/pets/default/cartpole_continuous/2021.01.26/1056/
+model_path: /home/hiro/mbrl/exp_storage/cp_pets_25/072357 #/home/hiro/mbrl/exp_storage/cp_pets_10/2021.02.18/0715 #/home/hiro/mbrl/exp_storage/cp_pets_100/1154
+# /home/hiro/mbrl/exp_storage/cp_pets_10/2021.02.18/0715
+# /home/hiro/mbrl/exp_storage/cp_pets_25/072357
+# /home/hiro/mbrl/exp_storage/cp_pets_100/1154
+
 model_path_hc: /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/162704/ #/home/hiro/mbrl/exp/ref/halfcheetah/ #/home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/162704/ # /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/161225/ #
 
 mode: recompute #imitate
@@ -15,7 +19,7 @@ log_frequency_agent: 1000
 save_video: false
 debug_mode: false
 
-experiment: mpc_{$mode}
+experiment: mpc_${mode}
 
 root_dir: "./exp"
 hydra:
