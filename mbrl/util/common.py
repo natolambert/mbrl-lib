@@ -38,8 +38,8 @@ def create_dynamics_model(
             -learned_rewards (bool): whether rewards should be learned or not
             -target_is_delta (bool): to be passed to the dynamics model wrapper
             -normalize (bool): to be passed to the dynamics model wrapper
-            -no_delta_list (list[int], optional): to be passed to the dynamics model wrapper
           -overrides
+            -no_delta_list (list[int], optional): to be passed to the dynamics model wrapper
             -obs_process_fn (str, optional): a Python function to pre-process observations
 
     If ``cfg.dynamics_model.model.in_size`` is not provided, it will be automatically set to
@@ -84,7 +84,7 @@ def create_dynamics_model(
         normalize=cfg.algorithm.normalize,
         learned_rewards=cfg.algorithm.learned_rewards,
         obs_process_fn=obs_process_fn,
-        no_delta_list=cfg.algorithm.get("no_delta_list", None),
+        no_delta_list=cfg.overrides.get("no_delta_list", None),
     )
     if model_dir:
         dynamics_model.load(model_dir)
@@ -143,6 +143,7 @@ def create_replay_buffers(
     act_shape: Tuple[int],
     load_dir: Optional[Union[str, pathlib.Path]] = None,
     train_is_bootstrap: bool = True,
+    rng: Optional[np.random.Generator] = None,
 ) -> Tuple[
     mbrl.replay_buffer.IterableReplayBuffer, mbrl.replay_buffer.IterableReplayBuffer
 ]:
@@ -179,6 +180,8 @@ def create_replay_buffers(
             be used to train an ensemble of bootstrapped models, in which case the training
             buffer will be an instance of :class:`mbrl.replay_buffer.BootstrapReplayBuffer`.
             Otherwise, it will be an instance of :class:`mbrl.replay_buffer.IterableReplayBuffer`.
+        rng (np.random.Generator, optional): a random number generator when sampling
+            batches. If None (default value), a new default generator will be used.
 
     Returns:
         (tuple of :class:`mbrl.replay_buffer.IterableReplayBuffer`): the training and validation
@@ -197,6 +200,7 @@ def create_replay_buffers(
             cfg.dynamics_model.model.ensemble_size,
             obs_shape,
             act_shape,
+            rng=rng,
             shuffle_each_epoch=True,
         )
     else:
@@ -205,6 +209,7 @@ def create_replay_buffers(
             cfg.overrides.model_batch_size,
             obs_shape,
             act_shape,
+            rng=rng,
             shuffle_each_epoch=True,
         )
     val_buffer_capacity = int(dataset_size * cfg.overrides.validation_ratio)
@@ -213,6 +218,7 @@ def create_replay_buffers(
         cfg.overrides.model_batch_size,
         obs_shape,
         act_shape,
+        rng=rng,
     )
 
     if load_dir:

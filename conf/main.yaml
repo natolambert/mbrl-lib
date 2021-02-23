@@ -14,8 +14,7 @@ experiment: default
 root_dir: "./exp"
 hydra:
   run:
-    dir: ./exp/${algorithm.name}/${experiment}/${overrides.env}/${now:%Y.%m.%d}/${now:%H%M%S}
+    dir: ${root_dir}/${algorithm.name}/${experiment}/${overrides.env}/${now:%Y.%m.%d}/${now:%H%M%S}
   sweep:
-    dir: ./exp/${algorithm.name}/${experiment}/${overrides.env}/${now:%Y.%m.%d}/${now:%H%M%S} #/checkpoint/nol/mbrl/exp/pets/${experiment}/${env}/${now:%Y.%m.%d}/${now:%H%M}
+    dir: ${root_dir}/${algorithm.name}/${experiment}/${overrides.env}/${now:%Y.%m.%d}/${now:%H%M%S}
     subdir: ${hydra.job.override_dirname}/${hydra.job.num}
-#    dir: ${root_dir}/${algorithm.name}/${experiment}/${overrides.env}/${now:%Y.%m.%d}/${now:%H%M}
