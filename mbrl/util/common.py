@@ -269,8 +269,8 @@ def train_policy_and_save_model_and_data(
     Runs `model_trainer.train()`, then saves the resulting model and the data used.
 
     Args:
-        dynamics_model (:class:`mbrl.models.DynamicsModelWrapper`): the model to train.
-        model_trainer (:class:`mbrl.models.DynamicsModelTrainer`): the model trainer.
+        policy (:class:`mbrl.models.PolicyWrapper`): the model to train.
+        model_trainer (:class:`mbrl.models.PolicyTrainer`): the model trainer.
         cfg (:class:`omegaconf.DictConfig`): configuration to use for training.
             Fields ``cfg.overrides.num_epochs_train_model`` and ``cfg.overrides.patience``
             will be passed to the model trainer (as ``num_epochs`` and ``patience`` kwargs,

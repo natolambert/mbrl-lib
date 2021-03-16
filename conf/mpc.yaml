@@ -31,10 +31,11 @@ model_paths:
 #  - 100trials
 
 model_path_hc: /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/162704/ #/home/hiro/mbrl/exp/ref/halfcheetah/ #/home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/162704/ # /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/161225/ #
+model_id: 1
 
 mode: imitate
 per_epoch: true
-num_eval: 10
+num_eval: 1
 seed: 0
 device: "cuda:0"
 log_frequency_agent: 1000
@@ -51,3 +52,9 @@ hydra:
     dir: ./exp/${algorithm.name}/${experiment}/${overrides.env}/${now:%Y.%m.%d}/${now:%H%M%S} #/checkpoint/nol/mbrl/exp/pets/${experiment}/${env}/${now:%Y.%m.%d}/${now:%H%M}
     subdir: ${hydra.job.override_dirname}/${hydra.job.num}
 #    dir: ${root_dir}/${algorithm.name}/${experiment}/${overrides.env}/${now:%Y.%m.%d}/${now:%H%M}
+  job:
+    config:
+      override_dirname:
+        kv_sep: '='
+        item_sep: ','
+        exclude_keys: ['seed']
