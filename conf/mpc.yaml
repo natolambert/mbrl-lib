@@ -4,14 +4,36 @@ defaults:
   - policy: gaussian_mlp #basic_ensemble #
   - overrides: mpc_cartpole
 
-model_path: /home/hiro/mbrl/exp_storage/cp_pets_25/072357 #/home/hiro/mbrl/exp_storage/cp_pets_10/2021.02.18/0715 #/home/hiro/mbrl/exp_storage/cp_pets_100/1154
-# /home/hiro/mbrl/exp_storage/cp_pets_10/2021.02.18/0715
-# /home/hiro/mbrl/exp_storage/cp_pets_25/072357
-# /home/hiro/mbrl/exp_storage/cp_pets_100/1154
+model_paths:
+#  - /home/hiro/mbrl/exp_storage/cp_pets_10/2021.02.18/0715
+#  - /home/hiro/mbrl/exp_storage/cp_pets_10/seed=0/0
+#  - /home/hiro/mbrl/exp_storage/cp_pets_10/seed=1/1
+#  - /home/hiro/mbrl/exp_storage/cp_pets_10/seed=2/2
+#  - /home/hiro/mbrl/exp_storage/cp_pets_10/seed=3/3
+#  - /home/hiro/mbrl/exp_storage/cp_pets_10/seed=4/4
+  - /home/hiro/mbrl/exp_storage/cp_pets_25/072357 #/home/hiro/mbrl/exp_storage/cp_pets_10/2021.02.18/0715 #/home/hiro/mbrl/exp_storage/cp_pets_100/1154
+  - /home/hiro/mbrl/exp_storage/cp_pets_25/seed=0/0
+  - /home/hiro/mbrl/exp_storage/cp_pets_25/seed=1/1
+  - /home/hiro/mbrl/exp_storage/cp_pets_25/seed=2/2
+  - /home/hiro/mbrl/exp_storage/cp_pets_25/seed=3/3
+  - /home/hiro/mbrl/exp_storage/cp_pets_25/seed=4/4
+#  - /home/hiro/mbrl/exp_storage/cp_pets_100/1154
+#  - /home/hiro/mbrl/exp_storage/cp_pets_100/seed=0/0
+#  - /home/hiro/mbrl/exp_storage/cp_pets_100/seed=1/1
+#  - /home/hiro/mbrl/exp_storage/cp_pets_100/seed=2/2
+#  - /home/hiro/mbrl/exp_storage/cp_pets_100/seed=3/3
+#  - /home/hiro/mbrl/exp_storage/cp_pets_100/seed=4/4
+  #
+
+#model_path_labels:
+#  - 10trials
+#  - 25trials
+#  - 100trials
 
 model_path_hc: /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/162704/ #/home/hiro/mbrl/exp/ref/halfcheetah/ #/home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/162704/ # /home/hiro/mbrl/exp/mpc/mpc/pets_halfcheetah/2020.12.06/161225/ #
 
-mode: recompute #imitate
+mode: imitate
+per_epoch: true
 num_eval: 10
 seed: 0
 device: "cuda:0"

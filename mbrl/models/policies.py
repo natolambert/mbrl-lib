@@ -327,6 +327,7 @@ class PolicyTrainer:
         num_epochs: Optional[int] = None,
         patience: Optional[int] = 50,
         callback: Optional[Callable] = None,
+        **kwargs,
     ) -> Tuple[List[float], List[float]]:
         """Trains the dynamics model for some number of epochs.
 
@@ -354,6 +355,7 @@ class PolicyTrainer:
                     - train score (i.e., result of ``trainer.evaluate()`` on training data)
                     - validation score
                     - best validation score so far
+                    - **kwargs for additional evaluation metrics
 
 
         Returns:
@@ -432,12 +434,13 @@ class PolicyTrainer:
                     train_score,
                     eval_score,
                     best_val_score,
+                    **kwargs
                 )
 
             if epochs_since_update >= patience:
                 break
 
-        if best_weights:
+        if best_weights and False:
             self.dynamics_model.model.load_state_dict(best_weights)
 
         self._train_iteration += 1

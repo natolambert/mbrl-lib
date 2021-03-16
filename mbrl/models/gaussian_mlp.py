@@ -284,7 +284,10 @@ class GaussianMLP(base_models.Model):
             loss = self._mse_loss(model_in, target)
         else:
             loss = self._nll_loss(model_in, target)
-        return  torch.multiply(weights, loss)
+        if weights is not None:
+            return torch.multiply(weights, loss)
+        else:
+            return loss
 
     def eval_score(self, model_in: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         """Computes the squared error for the model over the given input/target.
