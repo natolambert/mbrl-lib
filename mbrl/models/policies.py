@@ -385,8 +385,8 @@ class PolicyTrainer:
         for epoch in epoch_iter:
             total_avg_loss = 0.0
             for bootstrap_batch in self.dataset_train:
-                if len(bootstrap_batch) == 1:
-                    bootstrap_batch = bootstrap_batch[0]
+                # if len(bootstrap_batch) == 1:
+                #     bootstrap_batch = bootstrap_batch[0]
                 avg_ensemble_loss = update_from_batch_fn(
                     bootstrap_batch, self.optimizers
                 )

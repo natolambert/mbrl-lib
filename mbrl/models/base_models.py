@@ -192,7 +192,7 @@ class Model(nn.Module, abc.ABC):
         self.train()
         optimizer.zero_grad()
         if weights is not None:
-            loss = self.loss(model_in, target, weights)
+            loss = torch.multiply(weights, self.loss(model_in, target))
         else:
             loss = self.loss(model_in, target)
         loss.backward()

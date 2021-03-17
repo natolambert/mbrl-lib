@@ -6,3 +6,5 @@ exp_local/
 notebooks/.ipynb_checkpoints
 _build
 __pycache__
+.exp/
+.exp_local/

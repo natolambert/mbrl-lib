@@ -89,6 +89,7 @@ def run(cfg: omegaconf.DictConfig):
     logger.register_group("MPC_earlywork", EVAL_LOG_FORMAT, color="green")
 
     # cfg.overrides.model_batch_size = 1
+    cfg.dynamics_model.model.ensemble_size = 1
     # FOR TRAINNG POLICY, train_is_bootstrap is False (change for models, if want ensemble)
     data, data_val = common_util.create_replay_buffers(
         cfg, env.observation_space.shape, env.action_space.shape, m_path, train_is_bootstrap=False,
@@ -123,36 +124,40 @@ def run(cfg: omegaconf.DictConfig):
         data_new = cast(mbrl.replay_buffer.BootstrapReplayBuffer, data_new)
         data_new_val.num_members = 1
         data_new_val = cast(mbrl.replay_buffer.BootstrapReplayBuffer, data_new_val)
-
+        data.batch_size=1
+        data_val.batch_size=1
         print(f"... Training datset of length {len(data)}")
-        for n, batch in enumerate(data):
-            if n % 50 == 0:
-                print(f"... recomuption on datapoint {n+1}")
-            if len(batch) == 1:
-                batch = batch[0]
-            obs, action_old, next_obs, reward, done = batch
-            # NOTE, the training data does NOT contain all of the actions in order
-            if done:
-                agent.reset(planning_horizon=20)
+        # if os.path.isfile(m_path+     "action_old.npz", a_old_n)
 
-            action = agent.act(obs)
-            a_old.append(action_old)
-            a_new.append(action)
-            rs.append(reward)
-            data_new.add(obs, action, next_obs, reward, done)
-            # trajectory_eval_fn = functools.partial(
-            #     env.evaluate_action_sequences,
-            #     initial_state=obs,
-            #     num_particles=cfg.num_particles,
-            #     propagation_method=cfg.propagation_method,
-            # )
-            # action_sequence, pred_val = controller.plan(
-            #     env.action_space.shape,
-            #     cfg.planning_horizon,
-            #     trajectory_eval_fn,
-            # )
+        # for n, batch in enumerate(data):
+        #     if n % 50 == 0:
+        #         print(f"... recomuption on datapoint {n+1}")
+        #     if len(batch) == 1:
+        #         batch = batch[0]
+        #     obs, action_old, next_obs, reward, done = batch
+        #     # NOTE, the training data does NOT contain all of the actions in order
+        #     if done:
+        #         agent.reset(planning_horizon=20)
+        #
+        #     action = agent.act(obs)
+        #     a_old.append(action_old)
+        #     a_new.append(action)
+        #     rs.append(reward)
+        #     data_new.add(obs, action, next_obs, reward, done)
+        #     # trajectory_eval_fn = functools.partial(
+        #     #     env.evaluate_action_sequences,
+        #     #     initial_state=obs,
+        #     #     num_particles=cfg.num_particles,
+        #     #     propagation_method=cfg.propagation_method,
+        #     # )
+        #     # action_sequence, pred_val = controller.plan(
+        #     #     env.action_space.shape,
+        #     #     cfg.planning_horizon,
+        #     #     trajectory_eval_fn,
+        #     # )
 
         for batch in data_val:
+            print(batch)
             if len(batch) == 1:
                 batch = batch[0]
             obs, action_old, next_obs, reward, done = batch
