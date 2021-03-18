@@ -1,4 +1,4 @@
-from typing import Optional, Tuple, Union
+from typing import List, Optional, Sequence, Tuple, Union
 
 import torch
 from torch import nn as nn
@@ -41,22 +41,23 @@ class GaussianMLP(base_models.Model):
     """
 
     def __init__(
-            self,
-            in_size: int,
-            out_size: int,
-            device: Union[str, torch.device],
-            num_layers: int = 4,
-            ensemble_size: int = 1,
-            hid_size: int = 200,
-            use_silu: bool = False,
-            deterministic: bool = False,
+        self,
+        in_size: int,
+        out_size: int,
+        device: Union[str, torch.device],
+        num_layers: int = 4,
+        ensemble_size: int = 1,
+        hid_size: int = 200,
+        use_silu: bool = False,
+        deterministic: bool = False,
     ):
         super().__init__(in_size, out_size, device)
         activation_cls = nn.SiLU if use_silu else nn.ReLU
 
         self.num_members = None
+        self._is_ensemble = False
         if ensemble_size > 1:
-            self.is_ensemble = True
+            self._is_ensemble = True
             self.num_members = ensemble_size
 
         def create_linear_layer(l_in, l_out):
@@ -77,13 +78,13 @@ class GaussianMLP(base_models.Model):
             )
         self.hidden_layers = nn.Sequential(*hidden_layers)
 
-        self.deterministic = deterministic
+        self._deterministic = deterministic
         if deterministic:
             self.mean_and_logvar = create_linear_layer(hid_size, out_size)
         else:
             self.mean_and_logvar = create_linear_layer(hid_size, 2 * out_size)
             logvar_shape = (
-                (self.num_members, 1, out_size) if self.is_ensemble else (1, out_size)
+                (self.num_members, 1, out_size) if self._is_ensemble else (1, out_size)
             )
             self.min_logvar = nn.Parameter(
                 -10 * torch.ones(logvar_shape, requires_grad=True)
@@ -96,55 +97,89 @@ class GaussianMLP(base_models.Model):
         self.apply(base_models.truncated_normal_init)
         self.to(self.device)
 
+        self.elite_models: List[int] = None
+
+    def _maybe_toggle_layers_use_only_elite(self, only_elite: bool):
+        if self.elite_models is None:
+            return
+        if self.num_members and self.num_members > 1 and only_elite:
+            for layer in self.hidden_layers:
+                # each layer is (linear layer, activation_func)
+                layer[0].set_elite(self.elite_models)
+                layer[0].toggle_use_only_elite()
+            self.mean_and_logvar.set_elite(self.elite_models)
+            self.mean_and_logvar.toggle_use_only_elite()
+
     def _default_forward(
-            self, x: torch.Tensor, **_kwargs
+        self, x: torch.Tensor, only_elite: bool = False, **_kwargs
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
+        self._maybe_toggle_layers_use_only_elite(only_elite)
         x = self.hidden_layers(x)
         mean_and_logvar = self.mean_and_logvar(x)
-        if self.deterministic:
+        self._maybe_toggle_layers_use_only_elite(only_elite)
+        if self._deterministic:
             return mean_and_logvar, None
         else:
             mean = mean_and_logvar[..., : self.out_size]
-            logvar = mean_and_logvar[..., self.out_size:]
-            logvar = self.max_logvar - F.softplus(self.max_logvar - logvar)
-            logvar = self.min_logvar + F.softplus(logvar - self.min_logvar)
+            logvar = mean_and_logvar[..., self.out_size :]
+            if self._is_ensemble and self.elite_models is not None:
+                model_idx = self.elite_models if only_elite else range(self.num_members)
+                assert not only_elite or (len(model_idx) != self.num_members), (
+                    "If elite size == self.num_members, it's better "
+                    "to make sure only_elite is false"
+                )
+                logvar = self.max_logvar[model_idx] - F.softplus(
+                    self.max_logvar[model_idx] - logvar
+                )
+                logvar = self.min_logvar[model_idx] + F.softplus(
+                    logvar - self.min_logvar[model_idx]
+                )
+            else:
+                logvar = self.max_logvar - F.softplus(self.max_logvar - logvar)
+                logvar = self.min_logvar + F.softplus(logvar - self.min_logvar)
             return mean, logvar
 
     def _forward_from_indices(
-            self, x: torch.Tensor, model_indices: torch.Tensor
+        self, x: torch.Tensor, model_shuffle_indices: torch.Tensor
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         _, batch_size, _ = x.shape
 
-        shuffled_x = x[:, model_indices, ...].view(
-            len(self), batch_size // len(self), -1
+        num_models = (
+            len(self.elite_models) if self.elite_models is not None else len(self)
+        )
+        shuffled_x = x[:, model_shuffle_indices, ...].view(
+            num_models, batch_size // num_models, -1
         )
 
-        # these are shuffled
-        mean, logvar = self._default_forward(shuffled_x)
+        mean, logvar = self._default_forward(shuffled_x, only_elite=True)
+        # not that mean and logvar are shuffled
         mean = mean.view(batch_size, -1)
-        mean[model_indices] = mean.clone()  # invert the shuffle
+        mean[model_shuffle_indices] = mean.clone()  # invert the shuffle
 
         if logvar is not None:
             logvar = logvar.view(batch_size, -1)
-            logvar[model_indices] = logvar.clone()  # invert the shuffle
+            logvar[model_shuffle_indices] = logvar.clone()  # invert the shuffle
 
         return mean, logvar
 
     def _forward_ensemble(
-            self,
-            x: torch.Tensor,
-            propagation: Optional[str] = None,
-            propagation_indices: Optional[torch.Tensor] = None,
-            rng: Optional[torch.Generator] = None,
+        self,
+        x: torch.Tensor,
+        propagation: Optional[str] = None,
+        propagation_indices: Optional[torch.Tensor] = None,
+        rng: Optional[torch.Generator] = None,
     ) -> Tuple[torch.Tensor, Optional[torch.Tensor]]:
         if propagation is None:
-            return self._default_forward(x)
+            return self._default_forward(x, only_elite=False)
         assert x.ndim == 2
-        if x.shape[0] % len(self) != 0:
+        model_len = (
+            len(self.elite_models) if self.elite_models is not None else len(self)
+        )
+        if x.shape[0] % model_len != 0:
             raise ValueError(
                 f"GaussianMLP ensemble requires batch size to be a multiple of the "
                 f"number of models. Current batch size is {x.shape[0]} for "
-                f"{len(self)} models."
+                f"{model_len} models."
             )
         x = x.unsqueeze(0)
         if propagation == "random_model":
@@ -155,20 +190,20 @@ class GaussianMLP(base_models.Model):
         if propagation == "fixed_model":
             return self._forward_from_indices(x, propagation_indices)
         if propagation == "expectation":
-            mean, logvar = self._default_forward(x)
+            mean, logvar = self._default_forward(x, only_elite=True)
             return mean.mean(dim=0), logvar.mean(dim=0)
         raise ValueError(f"Invalid propagation method {propagation}.")
 
     def forward(  # type: ignore
-            self,
-            x: torch.Tensor,
-            propagation: Optional[str] = None,
-            propagation_indices: Optional[torch.Tensor] = None,
-            rng: Optional[torch.Generator] = None,
+        self,
+        x: torch.Tensor,
+        propagation: Optional[str] = None,
+        propagation_indices: Optional[torch.Tensor] = None,
+        rng: Optional[torch.Generator] = None,
     ) -> Tuple[torch.Tensor, torch.Tensor]:
         """Computes mean and logvar predictions for the given input.
 
-        When ``self.is_ensemble = True``, the model supports uncertainty propagation options
+        When ``self._is_ensemble = True``, the model supports uncertainty propagation options
         that can be used to aggregate the outputs of the different models in the ensemble.
         Valid propagation options are:
 
@@ -180,7 +215,10 @@ class GaussianMLP(base_models.Model):
             - "expectation": the output for each element in the batch will be the mean across
               models.
 
-        When ``propagation is None``, the forward pass will return one output for each model.
+        If a set of elite models has been indicated (via :meth:`set_elite()`), then all
+        propagation methods will operate with only on the elite set. This has no effect when
+        ``propagation is None``, in which case the forward pass will return one output for
+        each model.
 
         Args:
             x (tensor): the input to the model. For non-ensemble, the shape must be
@@ -213,7 +251,7 @@ class GaussianMLP(base_models.Model):
             the output to :func:`mbrl.math.propagate`.
 
         """
-        if self.is_ensemble:
+        if self._is_ensemble:
             return self._forward_ensemble(
                 x,
                 propagation=propagation,
@@ -224,39 +262,32 @@ class GaussianMLP(base_models.Model):
 
     def _mse_loss(self, model_in: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         pred_mean, _ = self.forward(model_in)
-        if self.is_ensemble:
+        if self._is_ensemble:
             assert model_in.ndim == 3 and target.ndim == 3
-            total_loss: torch.Tensor = 0.0
-            for i in range(self.num_members):
-                member_loss = F.mse_loss(pred_mean, target)
-                total_loss += member_loss
-            return total_loss / self.num_members
+            return F.mse_loss(pred_mean, target, reduce=None).sum((1, 2)).mean()
         else:
             assert model_in.ndim == 2 and target.ndim == 2
             return F.mse_loss(pred_mean, target)
 
     def _nll_loss(self, model_in: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
         pred_mean, pred_logvar = self.forward(model_in)
-        if self.is_ensemble:
+        if self._is_ensemble:
             assert model_in.ndim == 3 and target.ndim == 3
-            nll: torch.Tensor = 0.0
-            for i in range(self.num_members):
-                member_loss = mbrl.math.gaussian_nll(pred_mean, pred_logvar, target)
-                member_loss += (
-                        0.01 * self.max_logvar[i].sum() - 0.01 * self.min_logvar[i].sum()
-                )
-                nll += member_loss
-            return nll / self.num_members
+            nll = mbrl.math.gaussian_nll(
+                pred_mean, pred_logvar, target, reduce=False
+            ).mean((1, 2))
+            nll += 0.01 * (self.max_logvar.sum((1, 2)) - self.min_logvar.sum((1, 2)))
+            return nll.mean()
         else:
             assert model_in.ndim == 2 and target.ndim == 2
             nll = mbrl.math.gaussian_nll(pred_mean, pred_logvar, target)
             return nll + 0.01 * self.max_logvar.sum() - 0.01 * self.min_logvar.sum()
 
     def loss(
-            self,
-            model_in: torch.Tensor,
-            target: torch.Tensor,
-            weights: Optional[torch.Tensor] = None,
+        self,
+        model_in: torch.Tensor,
+        target: torch.Tensor,
+        weights: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Computes Gaussian NLL loss.
 
@@ -294,7 +325,7 @@ class GaussianMLP(base_models.Model):
 
         When model is not an ensemble, this is equivalent to
         `F.mse_loss(model(model_in, target), reduction="none")`. If the model is ensemble,
-        then return value is averaged over the model dimension.
+        then return is batched over the model dimension.
 
         Args:
             model_in (tensor): input tensor. The shape must be ``B x Id``, where `B`` and ``Id``
@@ -303,17 +334,14 @@ class GaussianMLP(base_models.Model):
                 represent batch size, and output dimension, respectively.
 
         Returns:
-            (tensor): a tensor with the squared error per output dimension, averaged over model.
+            (tensor): a tensor with the squared error per output dimension, batched over model.
         """
         assert model_in.ndim == 2 and target.ndim == 2
         with torch.no_grad():
             pred_mean, _ = self.forward(model_in)
-            if self.is_ensemble:
+            if self._is_ensemble:
                 target = target.repeat((self.num_members, 1, 1))
-            score = F.mse_loss(pred_mean, target, reduction="none").mean(dim=1)
-            if score.ndim == 2:
-                score = score.mean(dim=0)
-            return score.mean()
+            return F.mse_loss(pred_mean, target, reduction="none")
 
     def save(self, path: str):
         torch.save(self.state_dict(), path)
@@ -321,20 +349,30 @@ class GaussianMLP(base_models.Model):
     def load(self, path: str):
         self.load_state_dict(torch.load(path))
 
-    def is_deterministic(self):
-        return self.deterministic
+    def _is_deterministic_impl(self):
+        return self._deterministic
+
+    def _is_ensemble_impl(self):
+        return self._is_ensemble
 
     def __len__(self):
         return self.num_members
 
     def sample_propagation_indices(
-            self, batch_size: int, _rng: torch.Generator
+        self, batch_size: int, _rng: torch.Generator
     ) -> torch.Tensor:
         """Returns a random permutation of integers in [0, ``batch_size``)."""
-        if batch_size % len(self) != 0:
+        model_len = (
+            len(self.elite_models) if self.elite_models is not None else len(self)
+        )
+        if batch_size % model_len != 0:
             raise ValueError(
                 "To use GaussianMLP's ensemble propagation, the batch size must "
                 "be a multiple of the number of models in the ensemble."
             )
         # rng causes segmentation fault, see https://github.com/pytorch/pytorch/issues/44714
         return torch.randperm(batch_size, device=self.device)
+
+    def set_elite(self, elite_indices: Sequence[int]):
+        if len(elite_indices) != self.num_members:
+            self.elite_models = list(elite_indices)

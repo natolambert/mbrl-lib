@@ -152,7 +152,7 @@ class PolicyWrapper:
                 targets.append(target)
         else:
             model_in, target = self._get_model_input_and_target_from_batch(
-                bootstrap_batch
+                bootstrap_batch[0]
             )
             model_ins.append(model_in)
             targets.append(target)
@@ -434,7 +434,7 @@ class PolicyTrainer:
                     train_score,
                     eval_score,
                     best_val_score,
-                    **kwargs
+                    **kwargs,
                 )
 
             if epochs_since_update >= patience:

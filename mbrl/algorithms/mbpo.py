@@ -36,7 +36,7 @@ def rollout_model_and_populate_sac_buffer(
 
     initial_obs, action, *_ = env_dataset.sample(batch_size, ensemble=False)
     obs = model_env.reset(
-        initial_obs_batch=initial_obs,
+        initial_obs_batch=cast(np.ndarray, initial_obs),
         propagation_method="random_model",
         return_as_np=True,
     )
@@ -78,7 +78,7 @@ def train(
     termination_fn: mbrl.types.TermFnType,
     device: torch.device,
     cfg: omegaconf.DictConfig,
-):
+) -> np.float32:
     # ------------------- Initialization -------------------
     debug_mode = cfg.get("debug_mode", False)
 
@@ -100,6 +100,8 @@ def train(
         torch_generator.manual_seed(cfg.seed)
 
     # -------------- Create initial overrides. dataset --------------
+    dynamics_model = mbrl.util.create_dynamics_model(cfg, obs_shape, act_shape)
+
     env_dataset_train, env_dataset_val = mbrl.util.create_replay_buffers(
         cfg,
         obs_shape,
@@ -110,20 +112,20 @@ def train(
     env_dataset_train = cast(
         mbrl.replay_buffer.BootstrapReplayBuffer, env_dataset_train
     )
-    mbrl.util.populate_buffers_with_agent_trajectories(
+    mbrl.util.rollout_agent_trajectories(
         env,
-        env_dataset_train,
-        env_dataset_val,
         cfg.algorithm.initial_exploration_steps,
-        cfg.overrides.validation_ratio,
         mbrl.planning.RandomAgent(env),
         {},
         rng,
+        train_dataset=env_dataset_train,
+        val_dataset=env_dataset_val,
+        val_ratio=cfg.overrides.validation_ratio,
+        callback=dynamics_model.update_normalizer,
     )
 
     # ---------------------------------------------------------
     # --------------------- Training Loop ---------------------
-    dynamics_model = mbrl.util.create_dynamics_model(cfg, obs_shape, act_shape)
 
     updates_made = 0
     env_steps = 0
@@ -233,4 +235,4 @@ def train(
 
             env_steps += 1
             obs = next_obs
-    return best_eval_reward
+    return np.float32(best_eval_reward)

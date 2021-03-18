@@ -1,5 +1,6 @@
 import abc
-from typing import Optional, Sequence, Tuple, Union, cast
+import warnings
+from typing import List, Optional, Sequence, Tuple, Union, cast
 
 import hydra.utils
 import numpy as np
@@ -47,17 +48,34 @@ class EnsembleLinearLayer(nn.Module):
         else:
             self.use_bias = False
 
+        self.elite_models: List[int] = None
+        self.use_only_elite = False
+
     def forward(self, x):
-        if self.use_bias:
-            return x.matmul(self.weight) + self.bias
+        if self.use_only_elite:
+            xw = x.matmul(self.weight[self.elite_models, ...])
+            if self.use_bias:
+                return xw + self.bias[self.elite_models, ...]
+            else:
+                return xw
         else:
-            return x.matmul(self.weight)
+            xw = x.matmul(self.weight)
+            if self.use_bias:
+                return xw + self.bias
+            else:
+                return xw
 
     def extra_repr(self) -> str:
         return (
             f"num_members={self.num_members}, in_size={self.in_size}, "
             f"out_size={self.out_size}, bias={self.use_bias}"
         )
+
+    def set_elite(self, elite_models: Sequence[int]):
+        self.elite_models = list(elite_models)
+
+    def toggle_use_only_elite(self):
+        self.use_only_elite = not self.use_only_elite
 
 
 # ------------------------------------------------------------------------ #
@@ -93,7 +111,6 @@ class Model(nn.Module, abc.ABC):
         self.in_size = in_size
         self.out_size = out_size
         self.device = torch.device(device)
-        self.is_ensemble = False
         self.to(device)
 
     def forward(self, x: torch.Tensor, **kwargs) -> Tuple[torch.Tensor, torch.Tensor]:
@@ -123,7 +140,6 @@ class Model(nn.Module, abc.ABC):
         Returns:
             (tensor): a loss tensor.
         """
-        pass
 
     @abc.abstractmethod
     def eval_score(self, model_in: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
@@ -148,22 +164,34 @@ class Model(nn.Module, abc.ABC):
         Returns:
             (tensor): a non-reduced tensor score.
         """
-        pass
 
     @abc.abstractmethod
     def save(self, path: str):
         """Saves the model to the given path. """
-        pass
 
     @abc.abstractmethod
     def load(self, path: str):
         """Loads the model from the given path."""
+
+    @abc.abstractmethod
+    def _is_deterministic_impl(self):
+        # Subclasses must specify if model is _deterministic or not
         pass
 
     @abc.abstractmethod
-    def is_deterministic(self):
-        """Whether the model produces logvar predictions or not."""
+    def _is_ensemble_impl(self):
+        # Subclasses must specify if they are ensembles or not
         pass
+
+    @property
+    def is_deterministic(self):
+        """Whether the model is deterministic or not."""
+        return self._is_deterministic_impl()
+
+    @property
+    def is_ensemble(self):
+        """Whether the model is an ensemble or not."""
+        return self._is_ensemble_impl()
 
     def update(
         self,
@@ -221,6 +249,10 @@ class Model(nn.Module, abc.ABC):
             )
         return None
 
+    def set_elite(self, elite_models: Sequence[int]):
+        """For ensemble models, indicates if some models should be considered elite."""
+        pass
+
 
 class BasicEnsemble(Model):
     """Implements an ensemble of bootstrapped models.
@@ -259,7 +291,6 @@ class BasicEnsemble(Model):
     ):
         super().__init__(in_size, out_size, device)
         self.members = []
-        self.is_ensemble = True
         for i in range(ensemble_size):
             model = hydra.utils.instantiate(member_cfg)
             self.members.append(model)
@@ -415,6 +446,7 @@ class BasicEnsemble(Model):
         inputs: torch.Tensor,
         targets: torch.Tensor,
         optimizers: Sequence[torch.optim.Optimizer],
+        weights: Optional[torch.Tensor] = None,
     ) -> float:
         """Updates all models of the ensemble.
 
@@ -452,12 +484,11 @@ class BasicEnsemble(Model):
         targets = [target for _ in range(len(self.members))]
 
         with torch.no_grad():
-            avg_ensemble_score = torch.tensor(0.0)
+            scores = []
             for i, model in enumerate(self.members):
                 model.eval()
-                score = model.eval_score(inputs[i], targets[i])
-                avg_ensemble_score = score + avg_ensemble_score
-            return avg_ensemble_score / len(self.members)
+                scores.append(model.eval_score(inputs[i], targets[i]))
+            return torch.stack(scores)
 
     def save(self, path: str):
         torch.save(self.state_dict(), path)
@@ -466,8 +497,11 @@ class BasicEnsemble(Model):
         state_dict = torch.load(path)
         self.load_state_dict(state_dict)
 
-    def is_deterministic(self):
-        return self.members[0].is_deterministic()
+    def _is_ensemble_impl(self):
+        return True
+
+    def _is_deterministic_impl(self):
+        return self.members[0].is_deterministic
 
     def sample_propagation_indices(
         self, batch_size: int, rng: torch.Generator
@@ -478,4 +512,9 @@ class BasicEnsemble(Model):
             (batch_size,),
             generator=rng,
             device=self.device,
+        )
+
+    def set_elite(self, elite_models: Sequence[int]):
+        warnings.warn(
+            "BasicEnsemble does not support elite models yet. All models will be used."
         )

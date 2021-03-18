@@ -1,4 +1,4 @@
-from typing import Optional, Sequence, Tuple, cast
+from typing import Optional, Tuple, Union, cast
 
 import dmc2gym.wrappers
 import gym
@@ -15,7 +15,7 @@ import mbrl.types
 
 
 def make_env(
-    cfg: omegaconf.DictConfig,
+    cfg: Union[omegaconf.ListConfig, omegaconf.DictConfig],
 ) -> Tuple[gym.Env, mbrl.types.TermFnType, Optional[mbrl.types.RewardFnType]]:
     """Creates an environment from a given OmegaConf configuration object.
 
@@ -60,7 +60,7 @@ def make_env(
     if "dmcontrol___" in cfg.overrides.env:
         domain, task = cfg.overrides.env.split("___")[1].split("--")
         term_fn = getattr(mbrl.env.termination_fns, domain)
-        if hasattr(cfg.overrides, "reward_fn"):
+        if hasattr(cfg.overrides, "reward_fn") and cfg.overrides.reward_fn is not None:
             reward_fn = getattr(mbrl.env.reward_fns, cfg.overrides.reward_fn)
         else:
             reward_fn = getattr(mbrl.env.reward_fns, cfg.overrides.term_fn, None)
@@ -68,7 +68,7 @@ def make_env(
     elif "gym___" in cfg.overrides.env:
         env = gym.make(cfg.overrides.env.split("___")[1])
         term_fn = getattr(mbrl.env.termination_fns, cfg.overrides.term_fn)
-        if hasattr(cfg.overrides, "reward_fn"):
+        if hasattr(cfg.overrides, "reward_fn") and cfg.overrides.reward_fn is not None:
             reward_fn = getattr(mbrl.env.reward_fns, cfg.overrides.reward_fn)
         else:
             reward_fn = getattr(mbrl.env.reward_fns, cfg.overrides.term_fn, None)
@@ -290,7 +290,7 @@ def rollout_mujoco_env(
     initial_obs: np.ndarray,
     lookahead: int,
     agent: Optional[mbrl.planning.Agent] = None,
-    plan: Optional[Sequence[np.ndarray]] = None,
+    plan: Optional[np.ndarray] = None,
 ) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Runs the environment for some number of steps then returns it to its original state.
 
