@@ -126,6 +126,7 @@ def create_replay_buffers(
     act_shape: Tuple[int],
     load_dir: Optional[Union[str, pathlib.Path]] = None,
     train_is_bootstrap: bool = True,
+    train_is_weighted: bool = False,
     collect_trajectories: bool = False,
     rng: Optional[np.random.Generator] = None,
 ) -> Tuple[
@@ -190,16 +191,28 @@ def create_replay_buffers(
             )
         maybe_max_trajectory_len = cfg.overrides.trial_length
     if train_is_bootstrap:
-        train_buffer = mbrl.replay_buffer.BootstrapReplayBuffer(
-            dataset_size,
-            cfg.overrides.model_batch_size,
-            cfg.dynamics_model.model.ensemble_size,
-            obs_shape,
-            act_shape,
-            rng=rng,
-            shuffle_each_epoch=True,
-            max_trajectory_length=maybe_max_trajectory_len,
-        )
+        if train_is_weighted:
+            train_buffer = mbrl.replay_buffer.WeightedBootstrapReplayBuffer(
+                dataset_size,
+                cfg.overrides.model_batch_size,
+                cfg.dynamics_model.model.ensemble_size,
+                obs_shape,
+                act_shape,
+                rng=rng,
+                shuffle_each_epoch=True,
+                max_trajectory_length=maybe_max_trajectory_len,
+            )
+        else:
+            train_buffer = mbrl.replay_buffer.BootstrapReplayBuffer(
+                dataset_size,
+                cfg.overrides.model_batch_size,
+                cfg.dynamics_model.model.ensemble_size,
+                obs_shape,
+                act_shape,
+                rng=rng,
+                shuffle_each_epoch=True,
+                max_trajectory_length=maybe_max_trajectory_len,
+            )
     else:
         train_buffer = mbrl.replay_buffer.IterableReplayBuffer(
             dataset_size,
@@ -468,24 +481,25 @@ def rollout_agent_trajectories(
                 if collect_full_trajectories and not done and which_dataset is not None:
                     which_dataset.close_trajectory()
                 break
+        if store_weights:
+            populate_datasets(
+                train_dataset,
+                val_dataset,
+                obs_l,
+                action_l,
+                next_obs_l,
+                reward_l,
+                done_l,
+                False,
+                val_ratio,
+                rng=rng,
+            )
+
         trial += 1
         total_rewards.append(total_reward)
         if collect_full_trajectories and trial == steps_or_trials_to_collect:
             break
 
-    if store_weights:
-        populate_datasets(
-            train_dataset,
-            val_dataset,
-            obs_l,
-            action_l,
-            next_obs_l,
-            reward_l,
-            done_l,
-            False,
-            val_ratio,
-            rng=rng,
-        )
     return total_rewards
 
 

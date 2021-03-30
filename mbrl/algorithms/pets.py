@@ -69,30 +69,34 @@ def train(
         cfg,
         obs_shape,
         act_shape,
+        train_is_weighted=cfg.algorithm.weighted,
         train_is_bootstrap=isinstance(dynamics_model.model, mbrl.models.Ensemble),
-        collect_trajectories=cfg.log_trajs,
+        collect_trajectories=cfg.algorithm.log_trajs,
         rng=rng,
     )
 
-    if cfg.weighted:
+    if cfg.algorithm.weighted:
         dataset_train = cast(
             mbrl.replay_buffer.WeightedBootstrapReplayBuffer, dataset_train
         )
+        dataset_train.setup()
     else:
         dataset_train = cast(mbrl.replay_buffer.BootstrapReplayBuffer, dataset_train)
 
+    # when doing traj, # of transitions for random doesn't work
     mbrl.util.rollout_agent_trajectories(
         env,
-        cfg.algorithm.initial_exploration_steps,
+        5,  # cfg.algorithm.initial_exploration_steps,
         mbrl.planning.RandomAgent(env),
         {},
         rng,
+        trial_length=cfg.overrides.trial_length,
         train_dataset=dataset_train,
         val_dataset=dataset_val,
         val_ratio=cfg.overrides.validation_ratio,
         callback=dynamics_model.update_normalizer,
-        collect_full_trajectories=cfg.log_traj,
-        store_weights=cfg.weighted,
+        collect_full_trajectories=cfg.algorithm.log_trajs,
+        store_weights=cfg.algorithm.weighted,
     )
     mbrl.util.save_buffers(dataset_train, dataset_val, work_dir)
 
@@ -106,6 +110,7 @@ def train(
         dataset_train,
         dataset_val=dataset_val,
         optim_lr=cfg.overrides.model_lr,
+        weight_loss=cfg.algorithm.weighted,
         weight_decay=cfg.overrides.model_wd,
         logger=logger,
     )
@@ -127,44 +132,62 @@ def train(
         )
 
         agent.reset(planning_horizon=planning_horizon)
-        done = False
-        total_reward = 0.0
-        steps_trial = 0
-        while not done:
-            # --------------- Model Training -----------------
-            if steps_trial == 0 or env_steps % cfg.algorithm.freq_train_model == 0:
-                mbrl.util.train_model_and_save_model_and_data(
-                    dynamics_model,
-                    model_trainer,
-                    cfg,
+
+        # DIFFERENT STRUCTURE BECAUSE WEIGHTED USES TRAJ ONLY
+        if cfg.algorithm.weighted:
+            total_reward = mbrl.util.rollout_agent_trajectories(
+                env,
+                1,
+                mbrl.planning.RandomAgent(env),
+                {},
+                rng,
+                trial_length=cfg.overrides.trial_length,
+                train_dataset=dataset_train,
+                val_dataset=dataset_val,
+                val_ratio=cfg.overrides.validation_ratio,
+                callback=dynamics_model.update_normalizer,
+                collect_full_trajectories=cfg.algorithm.log_trajs,
+                store_weights=cfg.algorithm.weighted,
+            )[0]
+        else:
+            done = False
+            total_reward = 0.0
+            steps_trial = 0
+            while not done:
+                # --------------- Model Training -----------------
+                if steps_trial == 0 or env_steps % cfg.algorithm.freq_train_model == 0:
+                    mbrl.util.train_model_and_save_model_and_data(
+                        dynamics_model,
+                        model_trainer,
+                        cfg,
+                        dataset_train,
+                        dataset_val,
+                        work_dir,
+                    )
+
+                # --- Doing env step using the agent and adding to model dataset ---
+                next_obs, reward, done, _ = mbrl.util.step_env_and_populate_dataset(
+                    env,
+                    obs,
+                    agent,
+                    {},
                     dataset_train,
                     dataset_val,
-                    work_dir,
+                    cfg.algorithm.increase_val_set,
+                    cfg.overrides.validation_ratio,
+                    rng,
+                    dynamics_model.update_normalizer,
                 )
 
-            # --- Doing env step using the agent and adding to model dataset ---
-            next_obs, reward, done, _ = mbrl.util.step_env_and_populate_dataset(
-                env,
-                obs,
-                agent,
-                {},
-                dataset_train,
-                dataset_val,
-                cfg.algorithm.increase_val_set,
-                cfg.overrides.validation_ratio,
-                rng,
-                dynamics_model.update_normalizer,
-            )
+                obs = next_obs
+                total_reward += reward
+                steps_trial += 1
+                env_steps += 1
+                if steps_trial == cfg.overrides.trial_length:
+                    break
 
-            obs = next_obs
-            total_reward += reward
-            steps_trial += 1
-            env_steps += 1
-            if steps_trial == cfg.overrides.trial_length:
-                break
-
-            if debug_mode:
-                print(f"Step {env_steps}: Reward {reward:.3f}.")
+                if debug_mode:
+                    print(f"Step {env_steps}: Reward {reward:.3f}.")
 
         if logger is not None:
             logger.log_data(

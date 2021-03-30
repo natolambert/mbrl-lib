@@ -141,7 +141,7 @@ class SimpleReplayBuffer:
         next_obs: np.ndarray,
         reward: float,
         done: bool,
-        weight: Optional[float]=None,
+        weight: Optional[float] = None,
     ):
         """Adds a transition (s, a, s', r, done) to the replay buffer.
 
@@ -482,7 +482,31 @@ class WeightedBootstrapReplayBuffer(BootstrapReplayBuffer):
             action_type=action_type,
             shuffle_each_epoch=shuffle_each_epoch,
         )
+        if max_trajectory_length:
+            self.trajectory_indices = []
+            capacity += max_trajectory_length
         self.weight = np.empty(capacity, dtype=np.float32)
+        self.mode = "reward"
+
+    def __iter__(self):
+        super().__iter__()
+        # for i in range(len(self.member_indices)):
+        #     self.member_indices[i] = self._rng.choice(
+        #         self.num_stored, size=self.num_stored, replace=True
+        #     )
+        return self
+
+    def __next__(self):
+        if not self._bootstrap_iter:
+            return super().__next__()
+        indices = self._get_indices_next_batch()
+        batches = []
+        weights = []
+        for member_idx in self.member_indices:
+            content_indices = member_idx[indices]
+            batches.append(self._batch_from_indices(content_indices))
+            weights.append(self._weight_from_indices(content_indices))
+        return _consolidate_weighted_batches(batches, weights)
 
     def _weight_from_indices(self, indices: Sized) -> np.ndarray:
         weights = self.weight[indices]
@@ -547,7 +571,6 @@ class WeightedBootstrapReplayBuffer(BootstrapReplayBuffer):
         self.weight[self.cur_idx] = weight
 
         # set type of re-weighting, will build in the future
-        self.mode = "reward"
         if self.trajectory_indices is not None:
             self._trajectory_bookkeeping(done)
         else:
@@ -591,17 +614,49 @@ class WeightedBootstrapReplayBuffer(BootstrapReplayBuffer):
         self,
     ):
         if self.mode == "reward":
-            self.max_reward = 0
+            self.max_reward = -np.inf
         elif self.mode == "distance":
             return NotImplementedError(
                 "Weighting off of distance from expert not implemented"
             )
 
     def compute_weights(self, obs: list, action: list, next_obs: list, reward: list):
+        print(f"Previous best reward: {self.max_reward}")
         cum_reward = np.sum(reward)
         if cum_reward > self.max_reward:
             self.max_reward = cum_reward
             weights = [1] * len(obs)
         else:
             weights = [cum_reward / self.max_reward] * len(obs)
+        print(f"New max reward {self.max_reward}")
         return weights
+
+
+def _consolidate_weighted_batches(
+    batches: Sequence[TransitionBatch], weights: Sequence[np.ndarray]
+) -> Tuple[TransitionBatch, np.ndarray]:
+    len_batches = len(batches)
+    b0 = batches[0]
+    w0 = weights[0]
+    obs = np.empty((len_batches,) + b0.obs.shape, dtype=b0.obs.dtype)
+    act = np.empty((len_batches,) + b0.act.shape, dtype=b0.act.dtype)
+    next_obs = np.empty((len_batches,) + b0.obs.shape, dtype=b0.obs.dtype)
+    rewards = np.empty((len_batches,) + b0.rewards.shape, dtype=np.float32)
+    dones = np.empty((len_batches,) + b0.dones.shape, dtype=bool)
+    weights_out = np.empty((len_batches,) + w0.shape, dtype=np.float32)
+    for i, (b, w) in enumerate(zip(batches, weights)):
+        obs[i] = b.obs
+        act[i] = b.act
+        next_obs[i] = b.next_obs
+        rewards[i] = b.rewards
+        dones[i] = b.dones
+        weights_out[i] = w
+    return TransitionBatch(obs, act, next_obs, rewards, dones), weights_out
+
+
+def update_weights(WeightedBootstrapReplayBuffer):
+    """
+
+    look at def sample_trajectory(self) to see if one can iterate through
+     all the trajectories and update them
+    """

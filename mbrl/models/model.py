@@ -163,7 +163,7 @@ class Model(nn.Module, abc.ABC):
         optimizer = cast(torch.optim.Optimizer, optimizer)
         self.train()
         optimizer.zero_grad()
-        if weight is None:
+        if weight is not None:
             loss = torch.multiply(self.loss(model_in, target), weight)
         else:
             loss = self.loss(model_in, target)
