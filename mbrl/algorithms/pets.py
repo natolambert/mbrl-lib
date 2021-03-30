@@ -70,9 +70,16 @@ def train(
         obs_shape,
         act_shape,
         train_is_bootstrap=isinstance(dynamics_model.model, mbrl.models.Ensemble),
+        collect_trajectories=cfg.log_trajs,
         rng=rng,
     )
-    dataset_train = cast(mbrl.replay_buffer.BootstrapReplayBuffer, dataset_train)
+
+    if cfg.weighted:
+        dataset_train = cast(
+            mbrl.replay_buffer.WeightedBootstrapReplayBuffer, dataset_train
+        )
+    else:
+        dataset_train = cast(mbrl.replay_buffer.BootstrapReplayBuffer, dataset_train)
 
     mbrl.util.rollout_agent_trajectories(
         env,
@@ -84,6 +91,8 @@ def train(
         val_dataset=dataset_val,
         val_ratio=cfg.overrides.validation_ratio,
         callback=dynamics_model.update_normalizer,
+        collect_full_trajectories=cfg.log_traj,
+        store_weights=cfg.weighted,
     )
     mbrl.util.save_buffers(dataset_train, dataset_val, work_dir)
 

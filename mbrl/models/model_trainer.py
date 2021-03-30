@@ -51,12 +51,15 @@ class DynamicsModelTrainer:
         dataset_val: Optional[replay_buffer.IterableReplayBuffer] = None,
         optim_lr: float = 1e-4,
         weight_decay: float = 1e-5,
+        weight_loss: Optional[bool] = False,
         logger: Optional[mbrl.logger.Logger] = None,
     ):
         self.model = model
         self.dataset_train = dataset_train
         self.dataset_val = dataset_val
         self._train_iteration = 0
+
+        self.weight_loss = weight_loss
 
         self.logger = logger
         if self.logger:
@@ -131,9 +134,18 @@ class DynamicsModelTrainer:
         )
         for epoch in epoch_iter:
             batch_losses: List[float] = []
-            for batch in self.dataset_train:
-                avg_ensemble_loss = self.model.update(batch, self.optimizer)
-                batch_losses.append(avg_ensemble_loss)
+            if self.weight_loss:
+                for batch, weight in self.dataset_train:
+                    avg_ensemble_loss = self.model.update(
+                        batch,
+                        self.optimizer,
+                        weight=torch.from_numpy(weight).to(self.model.device),
+                    )
+                    batch_losses.append(avg_ensemble_loss)
+            else:
+                for batch in self.dataset_train:
+                    avg_ensemble_loss = self.model.update(batch, self.optimizer)
+                    batch_losses.append(avg_ensemble_loss)
             total_avg_loss = np.mean(batch_losses).mean().item()
             training_losses.append(total_avg_loss)
 
@@ -219,6 +231,9 @@ class DynamicsModelTrainer:
 
         batch_scores_list = []  # type: ignore
         for batch in dataset:
+            # ignore weights on val
+            if len(batch) == 2:
+                batch = batch[0]
             avg_batch_score = self.model.eval_score(batch)
             assert avg_batch_score.ndim in (2, 3)
             mean_axis = 1 if avg_batch_score.ndim == 2 else (1, 2)

@@ -141,6 +141,7 @@ class SimpleReplayBuffer:
         next_obs: np.ndarray,
         reward: float,
         done: bool,
+        weight: Optional[float]=None,
     ):
         """Adds a transition (s, a, s', r, done) to the replay buffer.
 
@@ -431,3 +432,176 @@ class BootstrapReplayBuffer(IterableReplayBuffer):
 
     def is_train_compatible_with_ensemble(self, ensemble_size: int):
         return len(self.member_indices) == ensemble_size
+
+
+class WeightedBootstrapReplayBuffer(BootstrapReplayBuffer):
+    """An iterable replay buffer that can be used to train ensemble of bootstrapped models.
+
+    Args:
+        capacity (int): the maximum number of transitions that the buffer can store.
+            When the capacity is reached, the contents are overwritten in FIFO fashion.
+        batch_size (int): the batch size to use when iterating over the stored data.
+        num_members (int): the number of models in the ensemble.
+        obs_shape (tuple of ints): the shape of the observations to store.
+        action_shape (tuple of ints): the shape of the actions to store.
+        rng (np.random.Generator, optional): a random number generator when sampling
+            batches. If None (default value), a new default generator will be used.
+        max_trajectory_length (int, optional): if given, indicates that trajectory
+            information should be stored and that trajectories will be at most this
+            number of steps. Defaults to ``None`` in which case no trajectory
+            information will be kept. The buffer will keep trajectory information
+            automatically using the done value when calling :meth:`add`.
+        obs_type (type): the data type of the observations (defaults to np.float32).
+        action_type (type): the data type of the actions (defaults to np.float32).
+        shuffle_each_epoch (bool): if ``True`` the iteration order is shuffled everytime a
+            loop over the data is completed. Defaults to ``False``.
+    """
+
+    def __init__(
+        self,
+        capacity: int,
+        batch_size: int,
+        num_members: int,
+        obs_shape: Tuple[int],
+        action_shape: Tuple[int],
+        rng: Optional[np.random.Generator] = None,
+        max_trajectory_length: Optional[int] = None,
+        obs_type=np.float32,
+        action_type=np.float32,
+        shuffle_each_epoch: bool = False,
+    ):
+        super(WeightedBootstrapReplayBuffer, self).__init__(
+            capacity,
+            batch_size,
+            num_members,
+            obs_shape,
+            action_shape,
+            rng=rng,
+            max_trajectory_length=max_trajectory_length,
+            obs_type=obs_type,
+            action_type=action_type,
+            shuffle_each_epoch=shuffle_each_epoch,
+        )
+        self.weight = np.empty(capacity, dtype=np.float32)
+
+    def _weight_from_indices(self, indices: Sized) -> np.ndarray:
+        weights = self.weight[indices]
+        return np.array(weights)
+
+    def sample(
+        self, batch_size: int, ensemble: bool = True
+    ) -> Tuple[TransitionBatch, np.ndarray]:
+        """Samples a bootstrapped batch from the replay buffer.
+
+        For each model in the ensemble, as specified by the ``num_members``
+        constructor argument, the buffer samples--with replacement--a batch of
+        stored transitions, and returns a tuple with all the sampled batches. That is,
+        batch[j][i] is the i-th transition for the j-th model.
+
+        Args:
+            batch_size (int): the number of samples to return for each model.
+            ensemble (bool): if ``False``, returns a single batch, rather than
+                a batch per model. Defaults to ``True``.
+
+        Returns:
+            (tuple of batches, or a single batch): a tuple of batches, one per
+            model as explained above, or a single batch if ``ensemble == False``.
+        """
+        if ensemble:
+            batches = []
+            weights = []
+            for member_idx in self.member_indices:
+                indices = self._rng.choice(self.num_stored, size=batch_size)
+                content_indices = member_idx[indices]
+                batches.append(self._batch_from_indices(content_indices))
+                weights.append(self._weight_from_indices(content_indices))
+            return _consolidate_batches(batches), np.array(weights)
+        else:
+            indices = self._rng.choice(self.num_stored, size=batch_size)
+            return self._batch_from_indices(indices), self._weight_from_indices(indices)
+
+    def add(
+        self,
+        obs: np.ndarray,
+        action: np.ndarray,
+        next_obs: np.ndarray,
+        reward: float,
+        done: bool,
+        weight: float,
+    ):
+        """Adds a transition (s, a, s', r, done) to the replay buffer.
+
+        Args:
+            obs (np.ndarray): the observation at time t.
+            action (np.ndarray): the action at time t.
+            next_obs (np.ndarray): the observation at time t + 1.
+            reward (float): the reward at time t + 1.
+            done (bool): a boolean indicating whether the episode ended or not.
+            weight (float): value compute by the weighting function for model training
+        """
+        self.obs[self.cur_idx] = obs
+        self.next_obs[self.cur_idx] = next_obs
+        self.action[self.cur_idx] = action
+        self.reward[self.cur_idx] = reward
+        self.done[self.cur_idx] = done
+        self.weight[self.cur_idx] = weight
+
+        # set type of re-weighting, will build in the future
+        self.mode = "reward"
+        if self.trajectory_indices is not None:
+            self._trajectory_bookkeeping(done)
+        else:
+            self.cur_idx = (self.cur_idx + 1) % self.capacity
+            self.num_stored = min(self.num_stored + 1, self.capacity)
+
+    def save(self, path: str):
+        """Saves the data in the replay buffer to a given path.
+
+        Args:
+            path (str): the file name to save the data to (the .npz extension will be appended).
+        """
+        np.savez(
+            path,
+            obs=self.obs[: self.num_stored],
+            next_obs=self.next_obs[: self.num_stored],
+            action=self.action[: self.num_stored],
+            reward=self.reward[: self.num_stored],
+            done=self.done[: self.num_stored],
+            weight=self.weight[: self.num_stored],
+        )
+
+    def load(self, path: str):
+        """Loads transition data from a given path.
+
+        Args:
+            path (str): the full path to the file with the transition data.
+        """
+        data = np.load(path)
+        num_stored = len(data["obs"])
+        self.obs[:num_stored] = data["obs"]
+        self.next_obs[:num_stored] = data["next_obs"]
+        self.action[:num_stored] = data["action"]
+        self.reward[:num_stored] = data["reward"]
+        self.done[:num_stored] = data["done"]
+        self.weight[:num_stored] = data["weight"]
+        self.num_stored = num_stored
+        self.cur_idx = self.num_stored % self.capacity
+
+    def setup(
+        self,
+    ):
+        if self.mode == "reward":
+            self.max_reward = 0
+        elif self.mode == "distance":
+            return NotImplementedError(
+                "Weighting off of distance from expert not implemented"
+            )
+
+    def compute_weights(self, obs: list, action: list, next_obs: list, reward: list):
+        cum_reward = np.sum(reward)
+        if cum_reward > self.max_reward:
+            self.max_reward = cum_reward
+            weights = [1] * len(obs)
+        else:
+            weights = [cum_reward / self.max_reward] * len(obs)
+        return weights

@@ -193,6 +193,7 @@ class ProprioceptiveModel(Model):
         batch: mbrl.types.TransitionBatch,
         optimizer: torch.optim.Optimizer,
         target: Optional[torch.Tensor] = None,
+        weight: Optional[torch.Tensor] = None,
     ) -> float:
         """Updates the model given a batch of transitions and an optimizer.
 

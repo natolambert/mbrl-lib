@@ -355,6 +355,7 @@ def rollout_agent_trajectories(
     val_dataset: Optional[mbrl.replay_buffer.SimpleReplayBuffer] = None,
     val_ratio: Optional[float] = 0.0,
     collect_full_trajectories: bool = False,
+    store_weights: bool = False,
 ) -> List[float]:
     """Rollout agent trajectories in the given environment.
 
@@ -410,6 +411,16 @@ def rollout_agent_trajectories(
     step = 0
     trial = 0
     total_rewards: List[float] = []
+
+    # Weights can be computed based on trajectory info,
+    # so store all trajectory info then update at end
+    if store_weights:
+        next_obs_l = []
+        action_l = []
+        obs_l = []
+        done_l = []
+        reward_l = []
+
     while True:
         obs = env.reset()
         done = False
@@ -417,8 +428,20 @@ def rollout_agent_trajectories(
         while not done:
             index = trial if collect_full_trajectories else step
             which_dataset = train_dataset if index in indices_train else val_dataset
-
-            if which_dataset is not None:
+            if store_weights:
+                next_obs, action, reward, done, info = step_env(
+                    env,
+                    obs,
+                    agent,
+                    agent_kwargs,
+                    callback=callback,
+                )
+                next_obs_l.append(next_obs)
+                action_l.append(action)
+                obs_l.append(obs)
+                done_l.append(done)
+                reward_l.append(reward)
+            elif which_dataset is not None:
                 next_obs, reward, done, info = step_env_and_populate_dataset(
                     env,
                     obs,
@@ -449,7 +472,62 @@ def rollout_agent_trajectories(
         total_rewards.append(total_reward)
         if collect_full_trajectories and trial == steps_or_trials_to_collect:
             break
+
+    if store_weights:
+        populate_datasets(
+            train_dataset,
+            val_dataset,
+            obs_l,
+            action_l,
+            next_obs_l,
+            reward_l,
+            done_l,
+            False,
+            val_ratio,
+            rng=rng,
+        )
     return total_rewards
+
+
+def step_env(
+    env: gym.Env,
+    obs: np.ndarray,
+    agent: mbrl.planning.Agent,
+    agent_kwargs: Dict,
+    callback: Optional[Callable] = None,
+) -> Tuple[np.ndarray, np.ndarray, float, bool, Dict]:
+    """
+    Separate Step env from populate dataset for computing trajectory-weights
+
+    TODO docstring
+    """
+    action = agent.act(obs, **agent_kwargs)
+    next_obs, reward, done, info = env.step(action)
+
+    if callback:
+        callback((obs, action, next_obs, reward, done))
+
+    return next_obs, action, reward, done, info
+
+
+def populate_datasets(
+    train_dataset: mbrl.replay_buffer.SimpleReplayBuffer,
+    val_dataset: mbrl.replay_buffer.SimpleReplayBuffer,
+    obs: list,
+    action: list,
+    next_obs: list,
+    reward: list,
+    done: list,
+    increase_val_set: bool,
+    validation_ratio: float,
+    rng: np.random.Generator,
+):
+    weights = train_dataset.compute_weights(obs, action, next_obs, reward)
+    for o, a, no, r, d, w in zip(obs, action, next_obs, reward, done, weights):
+        dataset = _select_dataset_to_update(
+            train_dataset, val_dataset, increase_val_set, validation_ratio, rng
+        )
+        dataset.add(o, a, no, r, d, w)
 
 
 def step_env_and_populate_dataset(

@@ -136,6 +136,7 @@ class Model(nn.Module, abc.ABC):
         model_in: ModelInput,
         optimizer: torch.optim.Optimizer,
         target: Optional[torch.Tensor] = None,
+        weight: Optional[torch.Tensor] = None,
     ) -> float:
         """Updates the model using backpropagation with given input and target tensors.
 
@@ -162,7 +163,10 @@ class Model(nn.Module, abc.ABC):
         optimizer = cast(torch.optim.Optimizer, optimizer)
         self.train()
         optimizer.zero_grad()
-        loss = self.loss(model_in, target)
+        if weight is None:
+            loss = torch.multiply(self.loss(model_in, target), weight)
+        else:
+            loss = self.loss(model_in, target)
         loss.backward()
         optimizer.step(None)
         return loss.item()
