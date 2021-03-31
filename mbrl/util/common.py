@@ -425,23 +425,29 @@ def rollout_agent_trajectories(
     trial = 0
     total_rewards: List[float] = []
 
-    # Weights can be computed based on trajectory info,
-    # so store all trajectory info then update at end
-    if store_weights:
-        next_obs_l = []
-        action_l = []
-        obs_l = []
-        done_l = []
-        reward_l = []
+    if collect_full_trajectories or store_weights:
+        log_traj = True
+    else:
+        log_traj = False
 
     while True:
         obs = env.reset()
         done = False
         total_reward = 0.0
+
+        # Weights can be computed based on trajectory info,
+        # so store all trajectory info then update at end
+        if log_traj:
+            next_obs_l = []
+            action_l = []
+            obs_l = []
+            done_l = []
+            reward_l = []
+
         while not done:
             index = trial if collect_full_trajectories else step
             which_dataset = train_dataset if index in indices_train else val_dataset
-            if store_weights:
+            if log_traj:
                 next_obs, action, reward, done, info = step_env(
                     env,
                     obs,
@@ -481,7 +487,8 @@ def rollout_agent_trajectories(
                 if collect_full_trajectories and not done and which_dataset is not None:
                     which_dataset.close_trajectory()
                 break
-        if store_weights:
+
+        if log_traj:
             populate_datasets(
                 train_dataset,
                 val_dataset,
@@ -493,10 +500,13 @@ def rollout_agent_trajectories(
                 False,
                 val_ratio,
                 rng=rng,
+                store_weights=store_weights,
             )
 
         trial += 1
         total_rewards.append(total_reward)
+        n_run = trial if not log_traj else step
+
         if collect_full_trajectories and trial == steps_or_trials_to_collect:
             break
 
@@ -535,13 +545,20 @@ def populate_datasets(
     increase_val_set: bool,
     validation_ratio: float,
     rng: np.random.Generator,
+    store_weights: bool = False,
 ):
-    weights = train_dataset.compute_weights(obs, action, next_obs, reward)
-    for o, a, no, r, d, w in zip(obs, action, next_obs, reward, done, weights):
-        dataset = _select_dataset_to_update(
-            train_dataset, val_dataset, increase_val_set, validation_ratio, rng
-        )
-        dataset.add(o, a, no, r, d, w)
+    # choose trajectory to store all points when logging trajectory
+    dataset = _select_dataset_to_update(
+        train_dataset, val_dataset, increase_val_set, validation_ratio, rng
+    )
+    if store_weights:
+        weights = train_dataset.compute_weights(obs, action, next_obs, reward, done)
+        for o, a, no, r, d, w in zip(obs, action, next_obs, reward, done, weights):
+            dataset.add(o, a, no, r, d, w)
+    else:
+        for o, a, no, r, d in zip(obs, action, next_obs, reward, done):
+            dataset.add(o, a, no, r, d)
+
 
 
 def step_env_and_populate_dataset(

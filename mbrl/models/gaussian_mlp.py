@@ -271,23 +271,33 @@ class GaussianMLP(Ensemble):
             return self._forward_ensemble(x, rng=rng)
         return self._default_forward(x)
 
-    def _mse_loss(self, model_in: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def _mse_loss(self, model_in: torch.Tensor, target: torch.Tensor, weight:Optional[torch.Tensor]) -> torch.Tensor:
         assert model_in.ndim == target.ndim
         if model_in.ndim == 2:  # add model dimension
             model_in = model_in.unsqueeze(0)
             target = target.unsqueeze(0)
         pred_mean, _ = self.forward(model_in, use_propagation=False)
-        return F.mse_loss(pred_mean, target, reduction="none").sum((1, 2)).mean()
+        if weight is not None:
+            loss = F.mse_loss(pred_mean, target, reduction="none").sum((1, 2))
+            return torch.multiply(weight, loss).mean()
+        else:
+            return F.mse_loss(pred_mean, target, reduction="none").sum((1, 2)).mean()
 
-    def _nll_loss(self, model_in: torch.Tensor, target: torch.Tensor) -> torch.Tensor:
+    def _nll_loss(self, model_in: torch.Tensor, target: torch.Tensor, weight:Optional[torch.Tensor]) -> torch.Tensor:
         assert model_in.ndim == target.ndim
         if model_in.ndim == 2:  # add model dimension
             model_in = model_in.unsqueeze(0)
             target = target.unsqueeze(0)
         pred_mean, pred_logvar = self.forward(model_in, use_propagation=False)
-        nll = mbrl.math.gaussian_nll(pred_mean, pred_logvar, target, reduce=False).mean(
+        nll = mbrl.math.gaussian_nll(pred_mean, pred_logvar, target, reduce=False)
+        if weight is not None:
+            nll = torch.multiply(weight.unsqueeze(dim=2), nll).mean(
             (1, 2)
         )
+        else:
+            nll = nll.mean(
+                (1, 2)
+            )
         nll += 0.01 * (self.max_logvar.sum((1, 2)) - self.min_logvar.sum((1, 2)))
         return nll.mean()
 
@@ -295,6 +305,7 @@ class GaussianMLP(Ensemble):
         self,
         model_in: torch.Tensor,
         target: Optional[torch.Tensor] = None,
+        weight: Optional[torch.Tensor] = None
     ) -> torch.Tensor:
         """Computes Gaussian NLL loss.
 
@@ -315,9 +326,9 @@ class GaussianMLP(Ensemble):
             the average over all models.
         """
         if self._deterministic:
-            return self._mse_loss(model_in, target)
+            return self._mse_loss(model_in, target, weight)
         else:
-            return self._nll_loss(model_in, target)
+            return self._nll_loss(model_in, target, weight)
 
     def eval_score(  # type: ignore
         self, model_in: torch.Tensor, target: Optional[torch.Tensor] = None

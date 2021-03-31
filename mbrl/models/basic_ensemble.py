@@ -183,6 +183,7 @@ class BasicEnsemble(Ensemble):
         self,
         model_ins: Sequence[torch.Tensor],
         targets: Optional[Sequence[torch.Tensor]] = None,
+        weights: Optional[Sequence[torch.Tensor]] = None,
     ) -> torch.Tensor:
         """Computes average loss over the losses of all members of the ensemble.
 
@@ -197,7 +198,7 @@ class BasicEnsemble(Ensemble):
         avg_ensemble_loss: torch.Tensor = 0.0
         for i, model in enumerate(self.members):
             model.train()
-            loss = model.loss(model_ins[i], targets[i])
+            loss = model.loss(model_ins[i], targets[i], weights)
             avg_ensemble_loss += loss
         return avg_ensemble_loss / len(self.members)
 

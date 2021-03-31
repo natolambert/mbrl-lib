@@ -20,8 +20,8 @@ optimizer:
   upper_bound: ???
   device: ${device}
 
-weighted: true
-log_trajs: true
+weighted: true #true
+log_trajs: true #true
 normalize: true
 target_is_delta: true
 increase_val_set: true

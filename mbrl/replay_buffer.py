@@ -194,6 +194,21 @@ class SimpleReplayBuffer:
         )
         return self._batch_from_indices(indices)
 
+    def get_trajectory(self, idx: int) -> Optional[TransitionBatch]:
+        """Gets a full trajectory at index idx and returns it as a batch.
+
+            Returns:
+                (tuple): A tuple with observations, actions, next observations, rewards
+                and done indicators, as numpy arrays, respectively; these will correspond
+                to a full trajectory. The i-th transition corresponds
+                to (obs[i], act[i], next_obs[i], rewards[i], dones[i])."""
+        if not self.trajectory_indices:
+            return None
+        indices = np.arange(
+            self.trajectory_indices[idx][0], self.trajectory_indices[idx][1]
+        )
+        return self._batch_from_indices(indices)
+
     def _batch_from_indices(self, indices: Sized) -> TransitionBatch:
         obs = self.obs[indices]
         next_obs = self.next_obs[indices]
@@ -620,15 +635,13 @@ class WeightedBootstrapReplayBuffer(BootstrapReplayBuffer):
                 "Weighting off of distance from expert not implemented"
             )
 
-    def compute_weights(self, obs: list, action: list, next_obs: list, reward: list):
-        print(f"Previous best reward: {self.max_reward}")
+    def compute_weights(self, obs: list, action: list, next_obs: list, reward: list, done: list):
         cum_reward = np.sum(reward)
         if cum_reward > self.max_reward:
             self.max_reward = cum_reward
             weights = [1] * len(obs)
         else:
-            weights = [cum_reward / self.max_reward] * len(obs)
-        print(f"New max reward {self.max_reward}")
+            weights = [np.exp(-(1-cum_reward / self.max_reward))] * len(obs)
         return weights
 
 
@@ -654,9 +667,30 @@ def _consolidate_weighted_batches(
     return TransitionBatch(obs, act, next_obs, rewards, dones), weights_out
 
 
-def update_weights(WeightedBootstrapReplayBuffer):
+def update_weights(
+        buffer: WeightedBootstrapReplayBuffer
+):
     """
 
     look at def sample_trajectory(self) to see if one can iterate through
      all the trajectories and update them
     """
+    if buffer.mode == "reward":
+        max_reward = buffer.max_reward
+    elif buffer.mode == "distance":
+        best_traj = []
+        return NotImplementedError(
+            "Weighting off of distance from expert not implemented"
+        )
+
+    #iterate through trajectories and update weights
+    # num_trajectories can be found by counting done's
+    num_trajs = len(buffer.trajectory_indices)
+    buffer_idx = 0
+    for i in range(num_trajs):
+        traj = buffer.get_trajectory(i)
+        # How do I update the trajectory with this info. Index by index?
+        w = buffer.compute_weights(traj.obs, traj.act, traj.next_obs, traj.rewards, traj.dones)
+        traj_len = buffer.trajectory_indices[i][1]-buffer.trajectory_indices[i][0]
+        buffer.weight[buffer_idx:buffer_idx+traj_len] = w
+        buffer_idx += traj_len

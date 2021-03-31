@@ -172,6 +172,7 @@ class ProprioceptiveModel(Model):
         self,
         batch: mbrl.types.TransitionBatch,
         target: Optional[torch.Tensor] = None,
+        weight: Optional[torch.Tensor] = None,
     ) -> torch.Tensor:
         """Evaluates the model score over a batch of transitions.
 
@@ -186,7 +187,7 @@ class ProprioceptiveModel(Model):
         """
         assert target is None
         model_in, target = self._get_model_input_and_target_from_batch(batch)
-        return self.model.loss(model_in, target=target)
+        return self.model.loss(model_in, target=target, weight=weight)
 
     def update(
         self,
@@ -203,7 +204,7 @@ class ProprioceptiveModel(Model):
         """
         assert target is None
         model_in, target = self._get_model_input_and_target_from_batch(batch)
-        return self.model.update(model_in, optimizer, target=target)
+        return self.model.update(model_in, optimizer, target=target, weight=weight)
 
     def eval_score(
         self,

@@ -76,17 +76,20 @@ def train(
     )
 
     if cfg.algorithm.weighted:
+        from mbrl.replay_buffer import update_weights
         dataset_train = cast(
             mbrl.replay_buffer.WeightedBootstrapReplayBuffer, dataset_train
         )
         dataset_train.setup()
+        n_initial = 5
     else:
         dataset_train = cast(mbrl.replay_buffer.BootstrapReplayBuffer, dataset_train)
+        n_initial = cfg.algorithm.initial_exploration_steps
 
     # when doing traj, # of transitions for random doesn't work
     mbrl.util.rollout_agent_trajectories(
         env,
-        5,  # cfg.algorithm.initial_exploration_steps,
+        n_initial,  # ,
         mbrl.planning.RandomAgent(env),
         {},
         rng,
@@ -134,11 +137,11 @@ def train(
         agent.reset(planning_horizon=planning_horizon)
 
         # DIFFERENT STRUCTURE BECAUSE WEIGHTED USES TRAJ ONLY
-        if cfg.algorithm.weighted:
+        if cfg.algorithm.weighted or cfg.algorithm.log_trajs:
             total_reward = mbrl.util.rollout_agent_trajectories(
                 env,
                 1,
-                mbrl.planning.RandomAgent(env),
+                agent,
                 {},
                 rng,
                 trial_length=cfg.overrides.trial_length,
@@ -149,6 +152,17 @@ def train(
                 collect_full_trajectories=cfg.algorithm.log_trajs,
                 store_weights=cfg.algorithm.weighted,
             )[0]
+
+            if cfg.algorithm.weighted: update_weights(dataset_train)
+            mbrl.util.train_model_and_save_model_and_data(
+                dynamics_model,
+                model_trainer,
+                cfg,
+                dataset_train,
+                dataset_val,
+                work_dir,
+            )
+
         else:
             done = False
             total_reward = 0.0
